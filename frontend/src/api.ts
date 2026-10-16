@@ -119,3 +119,30 @@ function buildDateParams(
   const query = params.toString();
   return query ? `?${query}` : "";
 }
+
+export interface BenchmarkPoint {
+  date: string;
+  Stock_Return: number;
+  Benchmark_Return: number;
+  Relative_Performance: number;
+}
+
+export interface BenchmarkComparisonResponse {
+  ticker: string;
+  benchmark: string;
+  count: number;
+  series: BenchmarkPoint[];
+}
+
+export function getBenchmarkComparison(
+  ticker: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<BenchmarkComparisonResponse> {
+  return request(
+    `/stocks/${encodeURIComponent(ticker)}/benchmark-comparison${buildDateParams(
+      startDate,
+      endDate,
+    )}`,
+  );
+}

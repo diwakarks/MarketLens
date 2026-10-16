@@ -1,7 +1,10 @@
 
 from fastapi import FastAPI, HTTPException
 
-from src.marketlens.analytics import calculate_metrics
+from src.marketlens.analytics import (
+    calculate_metrics,
+    calculate_benchmark_comparison,
+)
 from src.marketlens.database import (
     get_connection,
     load_market_data_from_db,
@@ -237,6 +240,72 @@ def get_stock_analytics_series(
 
     return {
         "ticker": ticker,
+        "count": len(records),
+        "series": records,
+    }
+
+@app.get("/stocks/{ticker}/benchmark-comparison", tags=["Analytics"])
+def get_benchmark_comparison(
+    ticker: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict:
+    """Compare a stock's cumulative return against the S&P 500."""
+    ticker = ticker.strip().upper()
+
+    if not ticker:
+        raise HTTPException(
+            status_code=400,
+            detail="Ticker symbol cannot be empty.",
+        )
+
+    try:
+        stock_data = load_market_data_from_db(ticker)
+        benchmark_data = load_market_data_from_db("^GSPC")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    stock_data = filter_market_data_by_date(
+        stock_data, start_date, end_date
+    )
+    benchmark_data = filter_market_data_by_date(
+        benchmark_data, start_date, end_date
+    )
+
+    try:
+        comparison = calculate_benchmark_comparison(
+            stock_data,
+            benchmark_data,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    series = comparison.reset_index()
+    series = series.rename(columns={series.columns[0]: "date"})
+    series["date"] = series["date"].apply(
+        lambda value: value.strftime("%Y-%m-%d")
+        if hasattr(value, "strftime")
+        else str(value)[:10]
+    )
+
+    records = series[
+        [
+            "date",
+            "Stock_Return",
+            "Benchmark_Return",
+            "Relative_Performance",
+        ]
+    ].to_dict(orient="records")
+
+    return {
+        "ticker": ticker,
+        "benchmark": "^GSPC",
         "count": len(records),
         "series": records,
     }

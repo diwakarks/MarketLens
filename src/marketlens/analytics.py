@@ -106,6 +106,58 @@ def calculate_metrics(data: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     return analysis, summary
 
+def calculate_benchmark_comparison(
+    stock_data: pd.DataFrame,
+    benchmark_data: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compare cumulative stock and benchmark returns on shared dates."""
+    for name, data in (
+        ("Stock", stock_data),
+        ("Benchmark", benchmark_data),
+    ):
+        if "Close" not in data.columns:
+            raise ValueError(f"{name} data must contain a Close column.")
+
+        if data.empty:
+            raise ValueError(f"{name} data cannot be empty.")
+
+        close = data["Close"].astype(float)
+
+        if close.isna().any() or (close <= 0).any():
+            raise ValueError(
+                f"{name} closing prices must be positive and non-missing."
+            )
+
+        if data.index.has_duplicates:
+            raise ValueError(f"{name} data contains duplicate dates.")
+
+    stock = stock_data[["Close"]].rename(
+        columns={"Close": "Stock_Close"}
+    )
+    benchmark = benchmark_data[["Close"]].rename(
+        columns={"Close": "Benchmark_Close"}
+    )
+
+    comparison = stock.join(benchmark, how="inner").sort_index()
+
+    if comparison.empty:
+        raise ValueError(
+            "Stock and benchmark have no overlapping trading dates."
+        )
+
+    comparison["Stock_Return"] = (
+        comparison["Stock_Close"] / comparison["Stock_Close"].iloc[0] - 1
+    )
+    comparison["Benchmark_Return"] = (
+        comparison["Benchmark_Close"]
+        / comparison["Benchmark_Close"].iloc[0]
+        - 1
+    )
+    comparison["Relative_Performance"] = (
+        comparison["Stock_Return"] - comparison["Benchmark_Return"]
+    )
+
+    return comparison
 
 def main() -> None:
     ticker = "AAPL"

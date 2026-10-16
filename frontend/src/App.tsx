@@ -4,12 +4,14 @@ import {
   getStockMetrics,
   getStockHistory,
   getAnalyticsSeries,
+  getBenchmarkComparison,
 } from "./api";
 import type {
   Stock,
   StockMetrics,
   DailyPrice,
   AnalyticsPoint,
+  BenchmarkPoint,
 } from "./api";
 import {
   ResponsiveContainer,
@@ -88,6 +90,10 @@ function App() {
   const [analyticsSeries, setAnalyticsSeries] = useState<AnalyticsPoint[]>([]);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState("");
+
+  const [benchmarkSeries, setBenchmarkSeries] = useState<BenchmarkPoint[]>([]);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [benchmarkError, setBenchmarkError] = useState("");
 
   const latestAvailableDate =
     fullHistory.length > 0 ? fullHistory[fullHistory.length - 1].date : "";
@@ -255,6 +261,47 @@ function App() {
     };
   }, [selectedStock, startDate, endDate, latestAvailableDate]);
 
+  useEffect(() => {
+    if (!selectedStock || !latestAvailableDate) return;
+
+    let cancelled = false;
+
+    async function loadBenchmarkComparison() {
+      setBenchmarkLoading(true);
+      setBenchmarkError("");
+      setBenchmarkSeries([]);
+
+      try {
+        const result = await getBenchmarkComparison(
+          selectedStock,
+          startDate,
+          endDate,
+        );
+
+        if (!cancelled) {
+          setBenchmarkSeries(result.series);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBenchmarkError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load benchmark comparison.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setBenchmarkLoading(false);
+        }
+      }
+    }
+
+    void loadBenchmarkComparison();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStock, startDate, endDate, latestAvailableDate]);
   const currency =
     stocks.find((stock) => stock.ticker === selectedStock)?.currency || "USD";
 
@@ -271,9 +318,15 @@ function App() {
 
         <p className="nav-heading">WORKSPACE</p>
         <nav className="navigation">
-          <a className="nav-item active" href="#overview">◫ Overview</a>
-          <a className="nav-item" href="#performance">↗ Performance</a>
-          <a className="nav-item" href="#risk">◈ Risk analytics</a>
+          <a className="nav-item active" href="#overview">
+            ◫ Overview
+          </a>
+          <a className="nav-item" href="#performance">
+            ↗ Performance
+          </a>
+          <a className="nav-item" href="#risk">
+            ◈ Risk analytics
+          </a>
         </nav>
 
         <div className="sidebar-bottom">
@@ -309,9 +362,13 @@ function App() {
               onChange={(event) => setSelectedStock(event.target.value)}
               disabled={stocksLoading || stocks.length === 0}
             >
-              {stocks.length === 0 && <option value="">No stocks available</option>}
+              {stocks.length === 0 && (
+                <option value="">No stocks available</option>
+              )}
               {stocks.map((stock) => (
-                <option key={stock.ticker} value={stock.ticker}>{stock.ticker}</option>
+                <option key={stock.ticker} value={stock.ticker}>
+                  {stock.ticker}
+                </option>
               ))}
             </select>
           </label>
@@ -319,7 +376,9 @@ function App() {
             <span>DATE RANGE</span>
             <select
               value={selectedPeriod}
-              onChange={(event) => setSelectedPeriod(event.target.value as Period)}
+              onChange={(event) =>
+                setSelectedPeriod(event.target.value as Period)
+              }
             >
               <option value="1M">1 Month</option>
               <option value="3M">3 Months</option>
@@ -330,41 +389,143 @@ function App() {
           </label>
         </section>
 
-        {stocksLoading && <div className="preview-notice" role="status">Loading registered stocks from the API…</div>}
-        {stocksError && <div className="error-notice" role="alert">Unable to load stocks: {stocksError}</div>}
-        {metricsLoading && <div className="preview-notice" role="status">Loading {selectedStock} metrics from PostgreSQL…</div>}
-        {metricsError && <div className="error-notice" role="alert">Unable to load {selectedStock} metrics: {metricsError}</div>}
+        {stocksLoading && (
+          <div className="preview-notice" role="status">
+            Loading registered stocks from the API…
+          </div>
+        )}
+        {stocksError && (
+          <div className="error-notice" role="alert">
+            Unable to load stocks: {stocksError}
+          </div>
+        )}
+        {metricsLoading && (
+          <div className="preview-notice" role="status">
+            Loading {selectedStock} metrics from PostgreSQL…
+          </div>
+        )}
+        {metricsError && (
+          <div className="error-notice" role="alert">
+            Unable to load {selectedStock} metrics: {metricsError}
+          </div>
+        )}
         {!metricsLoading && !metricsError && metrics && (
           <div className="preview-notice">
-            <span>i</span> Showing {metrics.observations} daily observations for <strong>{selectedStock}</strong>, from {metrics.start_date} to {metrics.end_date}.
+            <span>i</span> Showing {metrics.observations} daily observations for{" "}
+            <strong>{selectedStock}</strong>, from {metrics.start_date} to{" "}
+            {metrics.end_date}.
           </div>
         )}
 
         <section className="metrics-grid" aria-label="Key market metrics">
-          <article className="metric-card"><p>Starting price</p><h3>{metrics ? formatPrice(metrics.starting_close, currency) : "—"}</h3><span>First observation</span></article>
-          <article className="metric-card"><p>Latest price</p><h3>{metrics ? formatPrice(metrics.ending_close, currency) : "—"}</h3><span>Most recent observation</span></article>
-          <article className="metric-card"><p>Total return</p><h3>{metrics ? formatPercent(metrics.total_return) : "—"}</h3><span>Historical price performance</span></article>
-          <article className="metric-card"><p>Annualized volatility</p><h3>{metrics ? formatPercent(metrics.annualized_volatility) : "—"}</h3><span>Annualized daily-return risk</span></article>
+          <article className="metric-card">
+            <p>Starting price</p>
+            <h3>
+              {metrics ? formatPrice(metrics.starting_close, currency) : "—"}
+            </h3>
+            <span>First observation</span>
+          </article>
+          <article className="metric-card">
+            <p>Latest price</p>
+            <h3>
+              {metrics ? formatPrice(metrics.ending_close, currency) : "—"}
+            </h3>
+            <span>Most recent observation</span>
+          </article>
+          <article className="metric-card">
+            <p>Total return</p>
+            <h3>{metrics ? formatPercent(metrics.total_return) : "—"}</h3>
+            <span>Historical price performance</span>
+          </article>
+          <article className="metric-card">
+            <p>Annualized volatility</p>
+            <h3>
+              {metrics ? formatPercent(metrics.annualized_volatility) : "—"}
+            </h3>
+            <span>Annualized daily-return risk</span>
+          </article>
         </section>
 
         <section className="analysis-grid" id="performance">
           <article className="panel performance-panel">
             <div className="panel-heading">
-              <div><p className="eyebrow">PRICE HISTORY</p><h2>Historical performance</h2></div>
-              <span className="panel-tag">{selectedStock || "—"} · {selectedPeriod}</span>
+              <div>
+                <p className="eyebrow">PRICE HISTORY</p>
+                <h2>Historical performance</h2>
+              </div>
+              <span className="panel-tag">
+                {selectedStock || "—"} · {selectedPeriod}
+              </span>
             </div>
             <div className="chart-container">
-              {historyLoading && <p className="chart-state" role="status">Loading historical prices…</p>}
-              {!historyLoading && historyError && <p className="chart-state chart-error" role="alert">Could not load price history: {historyError}</p>}
-              {!historyLoading && !historyError && history.length === 0 && <p className="chart-state">No historical prices are available.</p>}
+              {historyLoading && (
+                <p className="chart-state" role="status">
+                  Loading historical prices…
+                </p>
+              )}
+              {!historyLoading && historyError && (
+                <p className="chart-state chart-error" role="alert">
+                  Could not load price history: {historyError}
+                </p>
+              )}
+              {!historyLoading && !historyError && history.length === 0 && (
+                <p className="chart-state">
+                  No historical prices are available.
+                </p>
+              )}
               {!historyLoading && !historyError && history.length > 0 && (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={history} margin={{ top: 12, right: 18, left: 8, bottom: 8 }}>
-                    <CartesianGrid stroke="#263243" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="date" tickFormatter={(date: string) => date.slice(5)} minTickGap={35} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={{ stroke: "#334153" }} tickLine={false} />
-                    <YAxis domain={["auto", "auto"]} width={65} tickFormatter={(price: number) => `$${price.toFixed(0)}`} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={{ backgroundColor: "#111b28", border: "1px solid #334153", borderRadius: 8, color: "#e8edf6" }} labelStyle={{ color: "#a5f3cf" }} labelFormatter={(label) => `Date: ${label}`} formatter={(value) => [typeof value === "number" ? formatPrice(value, currency) : value, "Closing price"]} />
-                    <Line type="monotone" dataKey="Close" name="Closing price" stroke="#a5f3cf" strokeWidth={2} dot={false} activeDot={{ r: 5, fill: "#a5f3cf", stroke: "#0d141f" }} isAnimationActive={false} />
+                  <LineChart
+                    data={history}
+                    margin={{ top: 12, right: 18, left: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid
+                      stroke="#263243"
+                      strokeDasharray="3 3"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(date: string) => date.slice(5)}
+                      minTickGap={35}
+                      tick={{ fill: "#93a1b6", fontSize: 11 }}
+                      axisLine={{ stroke: "#334153" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={["auto", "auto"]}
+                      width={65}
+                      tickFormatter={(price: number) => `$${price.toFixed(0)}`}
+                      tick={{ fill: "#93a1b6", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#111b28",
+                        border: "1px solid #334153",
+                        borderRadius: 8,
+                        color: "#e8edf6",
+                      }}
+                      labelStyle={{ color: "#a5f3cf" }}
+                      labelFormatter={(label) => `Date: ${label}`}
+                      formatter={(value) => [
+                        typeof value === "number"
+                          ? formatPrice(value, currency)
+                          : value,
+                        "Closing price",
+                      ]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="Close"
+                      name="Closing price"
+                      stroke="#a5f3cf"
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 5, fill: "#a5f3cf", stroke: "#0d141f" }}
+                      isAnimationActive={false}
+                    />
                   </LineChart>
                 </ResponsiveContainer>
               )}
@@ -372,53 +533,317 @@ function App() {
           </article>
 
           <article className="panel risk-panel" id="risk">
-            <div className="panel-heading"><div><p className="eyebrow">DOWNSIDE RISK</p><h2>Risk snapshot</h2></div></div>
-            <div className="risk-row"><div><span>Maximum drawdown</span><p>Largest peak-to-trough decline</p></div><strong>{metrics ? formatPercent(metrics.maximum_drawdown) : "—"}</strong></div>
-            <div className="risk-row"><div><span>Annualized volatility</span><p>Dispersion of daily returns</p></div><strong>{metrics ? formatPercent(metrics.annualized_volatility) : "—"}</strong></div>
-            <div className="risk-note"><strong>Why this matters</strong><p>Returns describe performance. Risk metrics help put that performance into context.</p></div>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">DOWNSIDE RISK</p>
+                <h2>Risk snapshot</h2>
+              </div>
+            </div>
+            <div className="risk-row">
+              <div>
+                <span>Maximum drawdown</span>
+                <p>Largest peak-to-trough decline</p>
+              </div>
+              <strong>
+                {metrics ? formatPercent(metrics.maximum_drawdown) : "—"}
+              </strong>
+            </div>
+            <div className="risk-row">
+              <div>
+                <span>Annualized volatility</span>
+                <p>Dispersion of daily returns</p>
+              </div>
+              <strong>
+                {metrics ? formatPercent(metrics.annualized_volatility) : "—"}
+              </strong>
+            </div>
+            <div className="risk-note">
+              <strong>Why this matters</strong>
+              <p>
+                Returns describe performance. Risk metrics help put that
+                performance into context.
+              </p>
+            </div>
           </article>
         </section>
 
         <section className="analytics-grid" aria-label="Advanced analytics">
-          {analyticsLoading && <div className="panel analytics-panel" role="status">Loading cumulative returns and drawdown…</div>}
-          {!analyticsLoading && analyticsError && <div className="panel analytics-panel chart-error" role="alert">Unable to load advanced analytics: {analyticsError}</div>}
-          {!analyticsLoading && !analyticsError && analyticsSeries.length > 0 && (
-            <>
-              <article className="panel analytics-panel">
-                <div className="panel-heading"><div><p className="eyebrow">PERFORMANCE</p><h2>Cumulative returns</h2></div><span className="panel-tag">{selectedStock} · {selectedPeriod}</span></div>
-                <p className="analytics-description">Percentage change from the first observed closing price.</p>
-                <div className="advanced-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={analyticsSeries} margin={{ top: 12, right: 18, left: 8, bottom: 8 }}>
-                      <CartesianGrid stroke="#263243" strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="date" tickFormatter={(date: string) => date.slice(5)} minTickGap={35} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={{ stroke: "#334153" }} tickLine={false} />
-                      <YAxis width={65} tickFormatter={(value: number) => `${(value * 100).toFixed(0)}%`} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ backgroundColor: "#111b28", border: "1px solid #334153", borderRadius: 8, color: "#e8edf6" }} labelStyle={{ color: "#a5f3cf" }} labelFormatter={(label) => `Date: ${label}`} formatter={(value) => [typeof value === "number" ? formatPercent(value) : value, "Cumulative return"]} />
-                      <Line type="monotone" dataKey="Cumulative_Return" name="Cumulative return" stroke="#a5f3cf" strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </article>
-              <article className="panel analytics-panel">
-                <div className="panel-heading"><div><p className="eyebrow">DOWNSIDE RISK</p><h2>Drawdown over time</h2></div><span className="panel-tag">{selectedStock} · {selectedPeriod}</span></div>
-                <p className="analytics-description">Percentage below the highest closing price observed up to each date.</p>
-                <div className="advanced-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={analyticsSeries} margin={{ top: 12, right: 18, left: 8, bottom: 8 }}>
-                      <CartesianGrid stroke="#263243" strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="date" tickFormatter={(date: string) => date.slice(5)} minTickGap={35} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={{ stroke: "#334153" }} tickLine={false} />
-                      <YAxis width={65} tickFormatter={(value: number) => `${(value * 100).toFixed(0)}%`} tick={{ fill: "#93a1b6", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ backgroundColor: "#111b28", border: "1px solid #334153", borderRadius: 8, color: "#e8edf6" }} labelStyle={{ color: "#a5f3cf" }} labelFormatter={(label) => `Date: ${label}`} formatter={(value) => [typeof value === "number" ? formatPercent(value) : value, "Drawdown"]} />
-                      <Line type="monotone" dataKey="Drawdown" name="Drawdown" stroke="#f28b82" strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </article>
-            </>
+          {analyticsLoading && (
+            <div className="panel analytics-panel" role="status">
+              Loading cumulative returns and drawdown…
+            </div>
           )}
+          {!analyticsLoading && analyticsError && (
+            <div className="panel analytics-panel chart-error" role="alert">
+              Unable to load advanced analytics: {analyticsError}
+            </div>
+          )}
+          {!analyticsLoading &&
+            !analyticsError &&
+            analyticsSeries.length > 0 && (
+              <>
+                <article className="panel analytics-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">PERFORMANCE</p>
+                      <h2>Cumulative returns</h2>
+                    </div>
+                    <span className="panel-tag">
+                      {selectedStock} · {selectedPeriod}
+                    </span>
+                  </div>
+                  <p className="analytics-description">
+                    Percentage change from the first observed closing price.
+                  </p>
+                  <div className="advanced-chart">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={analyticsSeries}
+                        margin={{ top: 12, right: 18, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid
+                          stroke="#263243"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="date"
+                          tickFormatter={(date: string) => date.slice(5)}
+                          minTickGap={35}
+                          tick={{ fill: "#93a1b6", fontSize: 11 }}
+                          axisLine={{ stroke: "#334153" }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          width={65}
+                          tickFormatter={(value: number) =>
+                            `${(value * 100).toFixed(0)}%`
+                          }
+                          tick={{ fill: "#93a1b6", fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "#111b28",
+                            border: "1px solid #334153",
+                            borderRadius: 8,
+                            color: "#e8edf6",
+                          }}
+                          labelStyle={{ color: "#a5f3cf" }}
+                          labelFormatter={(label) => `Date: ${label}`}
+                          formatter={(value) => [
+                            typeof value === "number"
+                              ? formatPercent(value)
+                              : value,
+                            "Cumulative return",
+                          ]}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="Cumulative_Return"
+                          name="Cumulative return"
+                          stroke="#a5f3cf"
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          isAnimationActive={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+                <article className="panel analytics-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">DOWNSIDE RISK</p>
+                      <h2>Drawdown over time</h2>
+                    </div>
+                    <span className="panel-tag">
+                      {selectedStock} · {selectedPeriod}
+                    </span>
+                  </div>
+                  <p className="analytics-description">
+                    Percentage below the highest closing price observed up to
+                    each date.
+                  </p>
+                  <div className="advanced-chart">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={analyticsSeries}
+                        margin={{ top: 12, right: 18, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid
+                          stroke="#263243"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="date"
+                          tickFormatter={(date: string) => date.slice(5)}
+                          minTickGap={35}
+                          tick={{ fill: "#93a1b6", fontSize: 11 }}
+                          axisLine={{ stroke: "#334153" }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          width={65}
+                          tickFormatter={(value: number) =>
+                            `${(value * 100).toFixed(0)}%`
+                          }
+                          tick={{ fill: "#93a1b6", fontSize: 11 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "#111b28",
+                            border: "1px solid #334153",
+                            borderRadius: 8,
+                            color: "#e8edf6",
+                          }}
+                          labelStyle={{ color: "#a5f3cf" }}
+                          labelFormatter={(label) => `Date: ${label}`}
+                          formatter={(value) => [
+                            typeof value === "number"
+                              ? formatPercent(value)
+                              : value,
+                            "Drawdown",
+                          ]}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="Drawdown"
+                          name="Drawdown"
+                          stroke="#f28b82"
+                          strokeWidth={2}
+                          dot={false}
+                          activeDot={{ r: 4 }}
+                          isAnimationActive={false}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+              </>
+            )}
         </section>
 
-        <footer className="footer"><span>MarketLens · Research &amp; Risk Analytics</span><span>Educational use only · Not investment advice</span></footer>
+        <section className="panel analytics-panel benchmark-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">RELATIVE PERFORMANCE</p>
+              <h2>Stock vs S&P 500</h2>
+            </div>
+            <span className="panel-tag">{selectedPeriod}</span>
+          </div>
+
+          <p className="analytics-description">
+            Cumulative returns from the first shared trading date.
+          </p>
+
+          {benchmarkLoading && (
+            <p className="chart-state" role="status">
+              Loading benchmark comparison…
+            </p>
+          )}
+
+          {!benchmarkLoading && benchmarkError && (
+            <p className="chart-state chart-error" role="alert">
+              Unable to load benchmark comparison: {benchmarkError}
+            </p>
+          )}
+
+          {!benchmarkLoading &&
+            !benchmarkError &&
+            benchmarkSeries.length > 0 && (
+              <>
+                <div className="advanced-chart">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={benchmarkSeries}
+                      margin={{ top: 12, right: 18, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid
+                        stroke="#263243"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={(date: string) => date.slice(5)}
+                        minTickGap={35}
+                        tick={{ fill: "#93a1b6", fontSize: 11 }}
+                        axisLine={{ stroke: "#334153" }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        width={65}
+                        tickFormatter={(value: number) =>
+                          `${(value * 100).toFixed(0)}%`
+                        }
+                        tick={{ fill: "#93a1b6", fontSize: 11 }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#111b28",
+                          border: "1px solid #334153",
+                          borderRadius: 8,
+                          color: "#e8edf6",
+                        }}
+                        labelStyle={{ color: "#a5f3cf" }}
+                        labelFormatter={(label) => `Date: ${label}`}
+                        formatter={(value, name) => [
+                          typeof value === "number"
+                            ? formatPercent(value)
+                            : value,
+                          name,
+                        ]}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="Stock_Return"
+                        name={selectedStock}
+                        stroke="#a5f3cf"
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="Benchmark_Return"
+                        name="S&P 500"
+                        stroke="#7aa7ff"
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="risk-row">
+                  <div>
+                    <span>Relative performance at period end</span>
+                    <p>Stock cumulative return minus benchmark return</p>
+                  </div>
+                  <strong>
+                    {formatPercent(
+                      benchmarkSeries[benchmarkSeries.length - 1]
+                        .Relative_Performance,
+                    )}
+                  </strong>
+                </div>
+              </>
+            )}
+        </section>
+
+        <footer className="footer">
+          <span>MarketLens · Research &amp; Risk Analytics</span>
+          <span>Educational use only · Not investment advice</span>
+        </footer>
       </section>
     </main>
   );

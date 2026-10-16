@@ -123,10 +123,18 @@ def import_market_data(ticker: str = "AAPL") -> int:
                 INSERT INTO instruments (ticker, name, exchange, currency)
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (ticker)
-                DO UPDATE SET ticker = EXCLUDED.ticker
+                DO UPDATE SET
+                    name = EXCLUDED.name,
+                    exchange = EXCLUDED.exchange,
+                    currency = EXCLUDED.currency
                 RETURNING id
                 """,
-                (ticker, ticker, "NASDAQ", "USD"),
+                (
+                    ticker,
+                    "S&P 500 Index" if ticker == "^GSPC" else ticker,
+                    "INDEX" if ticker == "^GSPC" else "NASDAQ",
+                    "USD",
+                ),
             )
 
             instrument_id = cursor.fetchone()[0]

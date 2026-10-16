@@ -1,6 +1,7 @@
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -46,7 +47,12 @@ def mock_market_data(monkeypatch, sample_market_data):
     def fake_load_market_data(ticker):
         if ticker == "UNKNOWN":
             raise ValueError("No market data found for UNKNOWN")
-        return sample_market_data.copy()
+        data = sample_market_data.copy()
+
+        if ticker == "^GSPC":
+            data["Close"] = data["Close"] * 2
+
+        return data
 
     monkeypatch.setattr(
         api,
@@ -189,3 +195,50 @@ def test_analytics_series_filters_dates(mock_market_data):
         "2026-09-01" <= point["date"] <= "2026-09-30"
         for point in body["series"]
     )
+
+
+def test_benchmark_comparison_endpoint(mock_market_data):
+    response = client.get("/stocks/AAPL/benchmark-comparison")
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["ticker"] == "AAPL"
+    assert body["benchmark"] == "^GSPC"
+    assert body["count"] > 0
+
+    first = body["series"][0]
+    assert first["Stock_Return"] == pytest.approx(0.0)
+    assert first["Benchmark_Return"] == pytest.approx(0.0)
+    assert first["Relative_Performance"] == pytest.approx(0.0)
+
+
+def test_benchmark_comparison_filters_dates(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/benchmark-comparison",
+        params={
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["count"] == 4
+    assert all(
+        "2026-09-01" <= point["date"] <= "2026-09-30"
+        for point in body["series"]
+    )
+
+
+def test_benchmark_comparison_invalid_dates(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/benchmark-comparison",
+        params={
+            "start_date": "2026-09-30",
+            "end_date": "2026-09-01",
+        },
+    )
+
+    assert response.status_code == 400
