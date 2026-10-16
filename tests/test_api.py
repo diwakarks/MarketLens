@@ -1,0 +1,191 @@
+
+from datetime import date
+
+import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
+
+from src.marketlens.api import app
+from src.marketlens import api
+
+
+client = TestClient(app)
+
+
+@pytest.fixture
+def sample_market_data():
+    """Create deterministic market data for API tests."""
+    dates = pd.to_datetime(
+        [
+            "2026-08-28",
+            "2026-08-31",
+            "2026-09-01",
+            "2026-09-02",
+            "2026-09-03",
+            "2026-09-30",
+            "2026-10-01",
+        ]
+    )
+
+    return pd.DataFrame(
+        {
+            "Open": [100, 102, 104, 103, 106, 110, 108],
+            "High": [103, 105, 106, 107, 109, 112, 111],
+            "Low": [99, 101, 102, 102, 104, 108, 106],
+            "Close": [102, 104, 103, 106, 108, 109, 110],
+            "Volume": [1000, 1100, 1200, 1300, 1400, 1500, 1600],
+        },
+        index=dates,
+    )
+
+
+@pytest.fixture
+def mock_market_data(monkeypatch, sample_market_data):
+    """Make API endpoints use test data instead of PostgreSQL."""
+
+    def fake_load_market_data(ticker):
+        if ticker == "UNKNOWN":
+            raise ValueError("No market data found for UNKNOWN")
+        return sample_market_data.copy()
+
+    monkeypatch.setattr(
+        api,
+        "load_market_data_from_db",
+        fake_load_market_data,
+    )
+
+
+def test_health_endpoint():
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_list_stocks(monkeypatch):
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            pass
+
+        def fetchall(self):
+            return [("AAPL", "Apple Inc.", "NASDAQ", "USD")]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        api,
+        "get_connection",
+        lambda: FakeConnection(),
+    )
+
+    response = client.get("/stocks")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+        }
+    ]
+
+
+def test_metrics_endpoint_returns_summary(mock_market_data):
+    response = client.get("/stocks/AAPL/metrics")
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["ticker"] == "AAPL"
+    assert body["metrics"]["observations"] == 7
+    assert body["metrics"]["start_date"] == "2026-08-28"
+    assert body["metrics"]["end_date"] == "2026-10-01"
+
+
+def test_metrics_endpoint_filters_dates(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/metrics",
+        params={
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+        },
+    )
+
+    assert response.status_code == 200
+
+    metrics = response.json()["metrics"]
+    assert metrics["observations"] == 4
+    assert metrics["start_date"] == "2026-09-01"
+    assert metrics["end_date"] == "2026-09-30"
+
+
+def test_invalid_date_range_returns_400(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/metrics",
+        params={
+            "start_date": "2026-09-30",
+            "end_date": "2026-09-01",
+        },
+    )
+
+    assert response.status_code == 400
+
+
+def test_unknown_ticker_returns_404(mock_market_data):
+    response = client.get("/stocks/UNKNOWN/metrics")
+
+    assert response.status_code == 404
+
+
+def test_history_endpoint_filters_dates(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/history",
+        params={
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["ticker"] == "AAPL"
+    assert body["count"] == 4
+    assert all(
+        "2026-09-01" <= row["date"] <= "2026-09-30"
+        for row in body["history"]
+    )
+
+
+def test_analytics_series_filters_dates(mock_market_data):
+    response = client.get(
+        "/stocks/AAPL/analytics-series",
+        params={
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30",
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["count"] == 4
+    assert all(
+        "2026-09-01" <= point["date"] <= "2026-09-30"
+        for point in body["series"]
+    )

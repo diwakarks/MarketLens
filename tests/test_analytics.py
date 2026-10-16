@@ -80,3 +80,36 @@ def test_non_positive_closing_prices_are_rejected():
 
     with pytest.raises(ValueError, match="positive and non-missing"):
         calculate_metrics(data)
+
+
+def test_cumulative_returns_track_investment_growth():
+    data = make_market_data([100.0, 110.0, 121.0, 110.0])
+
+    analysis, _ = calculate_metrics(data)
+
+    assert np.isnan(analysis["Cumulative_Return"].iloc[0])
+    assert analysis["Cumulative_Return"].iloc[1] == pytest.approx(0.10)
+    assert analysis["Cumulative_Return"].iloc[2] == pytest.approx(0.21)
+    assert analysis["Cumulative_Return"].iloc[3] == pytest.approx(0.10)
+
+
+def test_drawdown_returns_to_zero_at_a_new_peak():
+    data = make_market_data([100.0, 120.0, 90.0, 125.0])
+
+    analysis, summary = calculate_metrics(data)
+
+    assert analysis["Drawdown"].iloc[0] == pytest.approx(0.0)
+    assert analysis["Drawdown"].iloc[2] == pytest.approx(-0.25)
+    assert analysis["Drawdown"].iloc[3] == pytest.approx(0.0)
+    assert summary["maximum_drawdown"] == pytest.approx(-0.25)
+
+
+def test_analysis_preserves_input_observations_and_order():
+    data = make_market_data([100.0, 95.0, 105.0])
+
+    analysis, summary = calculate_metrics(data)
+
+    assert len(analysis) == len(data)
+    assert analysis.index.equals(data.index)
+    assert analysis["Close"].tolist() == [100.0, 95.0, 105.0]
+    assert summary["observations"] == 3
