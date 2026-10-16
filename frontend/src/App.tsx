@@ -444,6 +444,31 @@ function App() {
             </h3>
             <span>Annualized daily-return risk</span>
           </article>
+          <article className="metric-card">
+            <p>Sharpe Ratio</p>
+            <h3>
+              {metrics?.sharpe_ratio != null
+                ? metrics.sharpe_ratio.toFixed(2)
+                : "—"}
+            </h3>
+            <span>Risk-adjusted return · 0% risk-free rate</span>
+          </article>
+          <article className="metric-card">
+            <p>Beta</p>
+            <h3>
+              {metrics?.beta != null ? metrics.beta.toFixed(2) : "—"}
+            </h3>
+            <span>Sensitivity to S&P 500 returns</span>
+            </article>
+            <article className="metric-card">
+              <p>Annualized Alpha</p>
+              <h3>
+                {metrics?.alpha_annual != null
+                  ? `${(metrics.alpha_annual * 100).toFixed(2)}%`
+                  : "—"}
+              </h3>
+              <span>Annualized excess return beyond market exposure</span>
+            </article>
         </section>
 
         <section className="analysis-grid" id="performance">

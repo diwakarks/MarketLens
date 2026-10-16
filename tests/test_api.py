@@ -242,3 +242,16 @@ def test_benchmark_comparison_invalid_dates(mock_market_data):
     )
 
     assert response.status_code == 400
+
+
+def test_metrics_endpoint_includes_beta_and_alpha():
+    response = client.get("/stocks/AAPL/metrics")
+
+    assert response.status_code == 200
+
+    metrics = response.json()["metrics"]
+
+    assert "beta" in metrics
+    assert "alpha_annual" in metrics
+    assert isinstance(metrics["beta"], (int, float))
+    assert isinstance(metrics["alpha_annual"], (int, float))

@@ -3,7 +3,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.marketlens.analytics import calculate_metrics
+from src.marketlens.analytics import (
+    calculate_beta_alpha, 
+    calculate_metrics, 
+    calculate_sharpe_ratio,
+    calculate_benchmark_comparison,
+)
 
 
 def make_market_data(prices):
@@ -113,3 +118,77 @@ def test_analysis_preserves_input_observations_and_order():
     assert analysis.index.equals(data.index)
     assert analysis["Close"].tolist() == [100.0, 95.0, 105.0]
     assert summary["observations"] == 3
+
+
+def test_sharpe_ratio_returns_finite_number():
+    data = pd.DataFrame(
+        {"Close": [100, 102, 101, 104, 103, 106]}
+    )
+
+    result = calculate_sharpe_ratio(data)
+
+    assert isinstance(result, float)
+    assert result == pytest.approx(result)
+    assert result != 0
+
+
+def test_sharpe_ratio_rejects_missing_close_column():
+    data = pd.DataFrame({"Open": [100, 101, 102]})
+
+    with pytest.raises(ValueError, match="Close"):
+        calculate_sharpe_ratio(data)
+
+
+def test_sharpe_ratio_rejects_insufficient_prices():
+    data = pd.DataFrame({"Close": [100, 102]})
+
+    with pytest.raises(ValueError, match="three closing prices"):
+        calculate_sharpe_ratio(data)
+
+
+def test_sharpe_ratio_rejects_zero_volatility():
+    data = pd.DataFrame({"Close": [100, 100, 100, 100]})
+
+    with pytest.raises(ValueError, match="zero or invalid volatility"):
+        calculate_sharpe_ratio(data)
+
+
+def test_beta_alpha_for_identical_stock_and_benchmark():
+    prices = pd.DataFrame(
+        {"Close": [100, 102, 101, 105, 103, 108]},
+        index=pd.date_range("2026-01-01", periods=6),
+    )
+
+    result = calculate_beta_alpha(prices, prices)
+
+    assert result["beta"] == pytest.approx(1.0)
+    assert result["alpha_annual"] == pytest.approx(0.0, abs=1e-10)
+
+
+def test_beta_alpha_rejects_zero_market_variance():
+    dates = pd.date_range("2026-01-01", periods=5)
+    stock = pd.DataFrame(
+        {"Close": [100, 101, 103, 102, 105]},
+        index=dates,
+    )
+    benchmark = pd.DataFrame(
+        {"Close": [100, 100, 100, 100, 100]},
+        index=dates,
+    )
+
+    with pytest.raises(ValueError, match="market variance"):
+        calculate_beta_alpha(stock, benchmark)
+
+
+def test_beta_alpha_rejects_insufficient_shared_dates():
+    stock = pd.DataFrame(
+        {"Close": [100, 102]},
+        index=pd.date_range("2026-01-01", periods=2),
+    )
+    benchmark = pd.DataFrame(
+        {"Close": [100, 101]},
+        index=pd.date_range("2026-02-01", periods=2),
+    )
+
+    with pytest.raises(ValueError, match="shared closing-price dates"):
+        calculate_beta_alpha(stock, benchmark)

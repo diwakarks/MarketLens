@@ -159,6 +159,169 @@ def calculate_benchmark_comparison(
 
     return comparison
 
+
+def calculate_sharpe_ratio(
+    data,
+    annual_risk_free_rate: float = 0.0,
+    periods_per_year: int = 252,
+) -> float:
+    """Calculate the annualized Sharpe ratio from daily closing prices."""
+    import math
+
+    import pandas as pd
+
+    if "Close" not in data.columns:
+        raise ValueError("Market data must contain a 'Close' column.")
+
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive.")
+
+    if annual_risk_free_rate <= -1:
+        raise ValueError("annual_risk_free_rate must be greater than -1.")
+
+    close = pd.to_numeric(data["Close"], errors="coerce")
+
+    if close.isna().any() or not close.map(math.isfinite).all():
+        raise ValueError("Closing prices must be finite and non-missing.")
+
+    if (close <= 0).any():
+        raise ValueError("Closing prices must be positive.")
+
+    daily_returns = close.pct_change().dropna()
+
+    if len(daily_returns) < 2:
+        raise ValueError("At least three closing prices are required.")
+
+    daily_risk_free_rate = (
+        (1 + annual_risk_free_rate) ** (1 / periods_per_year) - 1
+    )
+
+    excess_returns = daily_returns - daily_risk_free_rate
+    daily_volatility = daily_returns.std(ddof=1)
+
+    if daily_volatility == 0 or not math.isfinite(daily_volatility):
+        raise ValueError(
+            "Sharpe ratio cannot be calculated with zero or invalid volatility."
+        )
+
+    sharpe_ratio = (
+        excess_returns.mean()
+        / daily_volatility
+        * math.sqrt(periods_per_year)
+    )
+
+    return float(sharpe_ratio)
+
+
+def calculate_beta_alpha(
+    stock_data,
+    benchmark_data,
+    annual_risk_free_rate: float = 0.0,
+    periods_per_year: int = 252,
+) -> dict[str, float]:
+    """Calculate market beta and annualized alpha from closing prices."""
+    import math
+
+    import pandas as pd
+
+    for name, data in (
+        ("stock", stock_data),
+        ("benchmark", benchmark_data),
+    ):
+        if "Close" not in data.columns:
+            raise ValueError(
+                f"{name.capitalize()} data must contain a 'Close' column."
+            )
+
+        if data.empty:
+            raise ValueError(f"{name.capitalize()} data cannot be empty.")
+
+        if data.index.has_duplicates:
+            raise ValueError(
+                f"{name.capitalize()} data cannot contain duplicate dates."
+            )
+
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive.")
+
+    if not math.isfinite(annual_risk_free_rate) or annual_risk_free_rate <= -1:
+        raise ValueError(
+            "annual_risk_free_rate must be finite and greater than -1."
+        )
+
+    stock_close = pd.to_numeric(
+        stock_data["Close"], errors="coerce"
+    )
+    benchmark_close = pd.to_numeric(
+        benchmark_data["Close"], errors="coerce"
+    )
+
+    for name, prices in (
+        ("stock", stock_close),
+        ("benchmark", benchmark_close),
+    ):
+        if prices.isna().any() or not prices.map(math.isfinite).all():
+            raise ValueError(
+                f"{name.capitalize()} closing prices must be finite and non-missing."
+            )
+
+        if (prices <= 0).any():
+            raise ValueError(
+                f"{name.capitalize()} closing prices must be positive."
+            )
+
+    aligned = pd.concat(
+        [
+            stock_close.rename("stock_close"),
+            benchmark_close.rename("benchmark_close"),
+        ],
+        axis=1,
+        join="inner",
+    ).sort_index()
+
+    returns = aligned.pct_change().dropna()
+
+    if len(returns) < 2:
+        raise ValueError(
+            "At least three shared closing-price dates are required."
+        )
+
+    stock_returns = returns["stock_close"]
+    market_returns = returns["benchmark_close"]
+
+    market_variance = market_returns.var(ddof=1)
+
+    if (
+        not math.isfinite(market_variance)
+        or market_variance <= 0
+    ):
+        raise ValueError(
+            "Beta cannot be calculated with zero or invalid market variance."
+        )
+
+    beta = stock_returns.cov(market_returns) / market_variance
+
+    daily_risk_free_rate = (
+        (1 + annual_risk_free_rate) ** (1 / periods_per_year) - 1
+    )
+
+    daily_alpha = (
+        stock_returns
+        - daily_risk_free_rate
+        - beta * (market_returns - daily_risk_free_rate)
+    ).mean()
+
+    alpha_annual = daily_alpha * periods_per_year
+
+    if not math.isfinite(beta) or not math.isfinite(alpha_annual):
+        raise ValueError("Beta or alpha calculation produced an invalid result.")
+
+    return {
+        "beta": float(beta),
+        "alpha_annual": float(alpha_annual),
+    }
+
+
 def main() -> None:
     ticker = "AAPL"
 

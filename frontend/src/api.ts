@@ -17,6 +17,9 @@ export interface StockMetrics {
   total_return: number;
   annualized_volatility: number;
   maximum_drawdown: number;
+  sharpe_ratio: number;
+  beta: number;
+alpha_annual: number;
 }
 
 export interface StockMetricsResponse {

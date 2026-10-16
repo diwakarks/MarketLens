@@ -1,16 +1,20 @@
 
+from datetime import date
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.marketlens.analytics import (
     calculate_metrics,
+    calculate_sharpe_ratio,
     calculate_benchmark_comparison,
+    calculate_beta_alpha,
 )
 from src.marketlens.database import (
     get_connection,
     load_market_data_from_db,
 )
-from fastapi.middleware.cors import CORSMiddleware
-from datetime import date
+
 
 app = FastAPI(
     title="MarketLens API",
@@ -30,6 +34,7 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
 
 def filter_market_data_by_date(
     market_data,
@@ -106,7 +111,7 @@ def get_stock_metrics(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> dict:
-    """Calculate historical performance and risk metrics."""
+    """Calculate historical performance, risk, and Sharpe ratio."""
     ticker = ticker.strip().upper()
 
     if not ticker:
@@ -131,10 +136,38 @@ def get_stock_metrics(
 
     _, summary = calculate_metrics(market_data)
 
+    try:
+        summary["sharpe_ratio"] = calculate_sharpe_ratio(market_data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to calculate Sharpe ratio: {exc}",
+        ) from exc
+
+    try:
+        benchmark_data = load_market_data_from_db("^GSPC")
+        benchmark_data = filter_market_data_by_date(
+            benchmark_data,
+            start_date,
+            end_date,
+        )
+
+        beta_alpha = calculate_beta_alpha(
+            market_data,
+            benchmark_data,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to calculate Beta and Alpha: {exc}",
+        ) from exc
+
+    summary.update(beta_alpha)
     return {
         "ticker": ticker,
         "metrics": summary,
     }
+    
 
 
 @app.get("/stocks/{ticker}/history", tags=["Analytics"])
@@ -155,7 +188,10 @@ def get_stock_history(
     try:
         market_data = load_market_data_from_db(ticker)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
 
     market_data = filter_market_data_by_date(
         market_data, start_date, end_date
@@ -175,7 +211,8 @@ def get_stock_history(
         "date", "Open", "High", "Low", "Close", "Volume"
     ]
     missing_columns = [
-        column for column in required_columns
+        column
+        for column in required_columns
         if column not in history.columns
     ]
 
@@ -212,7 +249,10 @@ def get_stock_analytics_series(
     try:
         market_data = load_market_data_from_db(ticker)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
 
     market_data = filter_market_data_by_date(
         market_data, start_date, end_date
@@ -243,6 +283,7 @@ def get_stock_analytics_series(
         "count": len(records),
         "series": records,
     }
+
 
 @app.get("/stocks/{ticker}/benchmark-comparison", tags=["Analytics"])
 def get_benchmark_comparison(
