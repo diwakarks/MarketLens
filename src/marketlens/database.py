@@ -193,14 +193,18 @@ def import_market_data(
         if (data["Volume"] > np.iinfo(np.int64).max).any():
             raise ValueError("Volume exceeds the supported integer range.")
 
-        if (data["High"] < data["Low"]).any():
+        tolerance = 1e-12
+
+        if (
+            data["High"] + tolerance < data["Low"]
+        ).any():
             raise ValueError("High cannot be lower than Low.")
 
         if (
-            (data["High"] < data["Open"])
-            | (data["High"] < data["Close"])
-            | (data["Low"] > data["Open"])
-            | (data["Low"] > data["Close"])
+            (data["High"] + tolerance < data["Open"])
+            | (data["High"] + tolerance < data["Close"])
+            | (data["Low"] - tolerance > data["Open"])
+            | (data["Low"] - tolerance > data["Close"])
         ).any():
             raise ValueError("Invalid OHLC price relationships.")
 
@@ -331,8 +335,6 @@ def import_market_data(
 
         raise
 
-
-
 def download_and_import_market_data(
     ticker: str,
     *,
@@ -350,29 +352,79 @@ def download_and_import_market_data(
         raise ValueError(
             "Instrument name, exchange, and currency are required."
         )
+    supported_us_equities = {
+        "AAPL": ("NASDAQ", "USD"),
+        "MSFT": ("NASDAQ", "USD"),
+    }
 
-    supported_equity = ticker.endswith((".NS", ".BO"))
-    supported_benchmark = ticker == "^NSEI"
+    supported_benchmarks = {
+        "^NSEI": ("NIFTY 50 Index", "NSE", "INR"),
+        "^GSPC": ("S&P 500 Index", "INDEX", "USD"),
+    }
 
-    if not (supported_equity or supported_benchmark):
-        raise ValueError(
-            "Only NSE/BSE equities and the NIFTY 50 benchmark "
-            "are supported by this download workflow."
+    if ticker in supported_us_equities:
+        expected_exchange, expected_currency = (
+            supported_us_equities[ticker]
         )
 
-    if supported_benchmark:
-        if name.strip() != "NIFTY 50 Index":
+        if exchange.strip().upper() != expected_exchange:
             raise ValueError(
-                "The ^NSEI ticker must use the name 'NIFTY 50 Index'."
+                f"{ticker} must use exchange '{expected_exchange}'."
             )
-        if exchange.strip().upper() != "NSE":
+
+        if currency.strip().upper() != expected_currency:
             raise ValueError(
-                "The ^NSEI benchmark must use exchange 'NSE'."
+                f"{ticker} must use currency '{expected_currency}'."
             )
+
+    elif ticker in supported_benchmarks:
+        expected_name, expected_exchange, expected_currency = (
+            supported_benchmarks[ticker]
+        )
+
+        if name.strip() != expected_name:
+            raise ValueError(
+                f"{ticker} must use the name '{expected_name}'."
+            )
+
+        if exchange.strip().upper() != expected_exchange:
+            raise ValueError(
+                f"{ticker} must use exchange '{expected_exchange}'."
+            )
+
+        if currency.strip().upper() != expected_currency:
+            raise ValueError(
+                f"{ticker} must use currency '{expected_currency}'."
+            )
+
+    elif ticker.endswith(".NS"):
+        if exchange.strip().upper() not in {"NSE", "NSI"}:
+            raise ValueError(
+                f"{ticker} must use exchange 'NSE' or 'NSI'."
+            )
+
         if currency.strip().upper() != "INR":
             raise ValueError(
-                "The ^NSEI benchmark must use currency 'INR'."
+                f"{ticker} must use currency 'INR'."
             )
+
+    elif ticker.endswith(".BO"):
+        if exchange.strip().upper() != "BSE":
+            raise ValueError(
+                f"{ticker} must use exchange 'BSE'."
+            )
+
+        if currency.strip().upper() != "INR":
+            raise ValueError(
+                f"{ticker} must use currency 'INR'."
+            )
+
+    else:
+        raise ValueError(
+            "Unsupported ticker. Supported instruments include "
+            "AAPL, MSFT, ^GSPC, ^NSEI, NSE/NSI equities, "
+            "and BSE equities."
+        )
 
     provider_refresh_id = _start_provider_refresh_log(ticker)
 
@@ -444,14 +496,17 @@ def download_and_import_market_data(
         if (candidate["Volume"] > np.iinfo(np.int64).max).any():
             raise ValueError("Provider volume exceeds the supported range.")
 
-        if (candidate["High"] < candidate["Low"]).any():
+        tolerance = 1e-12
+        if (
+            candidate["High"] + tolerance < candidate["Low"]
+        ).any():
             raise ValueError("Provider data contains invalid OHLC values.")
 
         if (
-            (candidate["High"] < candidate["Open"])
-            | (candidate["High"] < candidate["Close"])
-            | (candidate["Low"] > candidate["Open"])
-            | (candidate["Low"] > candidate["Close"])
+            (candidate["High"] + tolerance < candidate["Open"])
+            | (candidate["High"] + tolerance < candidate["Close"])
+            | (candidate["Low"] - tolerance > candidate["Open"])
+            | (candidate["Low"] - tolerance > candidate["Close"])
         ).any():
             raise ValueError("Provider data contains invalid OHLC values.")
 

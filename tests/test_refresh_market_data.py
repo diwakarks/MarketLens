@@ -117,3 +117,41 @@ def test_refresh_without_existing_csv_handles_database_failure(
     assert refresh_module.refresh_market_data("AAPL", "1y") is False
     assert not (tmp_path / "AAPL_daily.csv").exists()
     assert not list(tmp_path.glob("*_candidate.csv"))
+
+
+def test_refresh_csv_promotion_failure_retains_candidate(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(refresh_module, "RAW_DATA_DIR", tmp_path)
+
+    active_path = tmp_path / "AAPL_daily.csv"
+    active_path.write_text("old data\n", encoding="utf-8")
+
+    def fake_fetch_market_data(ticker, period, *, output_path=None):
+        output_path.write_text(
+            "Date,Close\n2026-10-16,101\n", encoding="utf-8"
+        )
+        return pd.DataFrame({"Close": [101.0]})
+
+    def fake_import_market_data(ticker, *, csv_path=None):
+        assert csv_path is not None
+        assert csv_path.exists()
+        return 1
+
+    def fail_replace(source, destination):
+        raise OSError("Simulated CSV promotion failure")
+
+    monkeypatch.setattr(
+        refresh_module, "fetch_market_data", fake_fetch_market_data
+    )
+    monkeypatch.setattr(
+        refresh_module, "import_market_data", fake_import_market_data
+    )
+    monkeypatch.setattr(refresh_module.os, "replace", fail_replace)
+
+    assert refresh_module.refresh_market_data("AAPL", "1y") is False
+    assert active_path.read_text(encoding="utf-8") == "old data\n"
+
+    candidates = list(tmp_path.glob("*_candidate.csv"))
+    assert len(candidates) == 1
+    assert candidates[0].read_text(encoding="utf-8").startswith("Date,Close")
