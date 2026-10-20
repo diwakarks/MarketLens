@@ -443,3 +443,39 @@ def test_market_insights_endpoint_returns_evidence(mock_market_data):
         assert insight["title"]
         assert insight["message"]
         assert insight["evidence"]
+
+
+def test_historical_portfolio_stress_uses_database_data(
+    monkeypatch, sample_market_data
+):
+    loaded_tickers = []
+
+    def fake_load_market_data_from_db(ticker):
+        loaded_tickers.append(ticker)
+        return sample_market_data.copy()
+
+    monkeypatch.setattr(
+        api,
+        "load_market_data_from_db",
+        fake_load_market_data_from_db,
+    )
+    monkeypatch.setattr(
+        api,
+        "calculate_historical_portfolio_stress",
+        lambda **kwargs: {"source": "database"},
+    )
+
+    response = client.post(
+        "/portfolio/historical-stress",
+        json={
+            "tickers": ["AAPL", "MSFT"],
+            "weights": [0.5, 0.5],
+            "start_date": "2026-08-28",
+            "end_date": "2026-09-03",
+            "initial_value": 10000,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"source": "database"}
+    assert loaded_tickers == ["AAPL", "MSFT"]

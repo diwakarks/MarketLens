@@ -21,7 +21,6 @@ from src.marketlens.analytics import (
     calculate_drawdown_recovery,
     generate_market_insights,
     calculate_portfolio_scenario,
-    load_market_data
 )
 from src.marketlens.database import (
     get_connection,
@@ -1007,7 +1006,7 @@ def historical_portfolio_stress(
     try:
         weights = dict(zip(tickers, request.weights))
         market_data = {
-            ticker: load_market_data(ticker)
+            ticker: load_market_data_from_db(ticker)
             for ticker in tickers
         }
 
