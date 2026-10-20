@@ -122,6 +122,7 @@ def import_market_data(
     name: str | None = None,
     exchange: str | None = None,
     currency: str | None = None,
+    csv_path: Path | None = None,
 ) -> int:
     """Validate and import historical CSV prices transactionally."""
     ticker = ticker.strip().upper()
@@ -133,8 +134,10 @@ def import_market_data(
     refresh_id = _start_refresh_log(ticker)
 
     try:
-        csv_path = RAW_DATA_DIR / f"{ticker}_daily.csv"
-
+        if csv_path is None:
+            csv_path = RAW_DATA_DIR / f"{ticker}_daily.csv"
+        else:
+            csv_path = Path(csv_path)
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
 

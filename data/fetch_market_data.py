@@ -147,6 +147,8 @@ def _validate_history(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
 def fetch_market_data(
     ticker: str = "AAPL",
     period: str = "1y",
+    *,
+    output_path: Path | None = None,
 ) -> pd.DataFrame:
     """Fetch, validate, and safely save daily historical market prices."""
     ticker = ticker.strip().upper()
@@ -192,7 +194,13 @@ def fetch_market_data(
         history = _validate_history(history, ticker)
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = DATA_DIR / f"{ticker}_daily.csv"
+
+        if output_path is None:
+            output_path = DATA_DIR / f"{ticker}_daily.csv"
+        else:
+            output_path = Path(output_path)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = output_path.with_suffix(".csv.tmp")
 
         try:
