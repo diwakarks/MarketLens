@@ -1190,7 +1190,8 @@ def calculate_historical_portfolio_scenario(
             "Target weights apply at the beginning of the period.",
             "Holdings are not rebalanced during the period.",
             "Asset returns use the first and last shared trading-date closing prices.",
-            "Dividends, fees, taxes, slippage, and other trading effects are not modeled.",
+            "Returns use provider-adjusted prices, which may reflect dividend and stock-split adjustments; dividends are not modeled as separate cash flows.",
+            "Fees, taxes, slippage, and other trading effects are not modeled.",
             "Historical outcomes do not predict future performance.",
         ],
     }
@@ -1324,7 +1325,8 @@ def calculate_portfolio_benchmark_comparison(
             "Both sides use the same shared start and end dates.",
             "Portfolio weights are initial weights.",
             "The portfolio is not rebalanced during the period.",
-            "Dividends, fees, taxes, and slippage are excluded.",
+            "Returns use provider-adjusted prices, which may reflect dividend and stock-split adjustments; dividends are not modeled as separate cash flows.",
+            "Fees, taxes, slippage, and other trading effects are not modeled.",
             "Only dates with valid closing prices for all holdings and the benchmark are used.",
         ],
     }
@@ -1449,7 +1451,8 @@ def calculate_historical_portfolio_stress(
             "Initial portfolio weights are held without rebalancing.",
             "Asset prices are aligned on shared trading dates.",
             "The selected period uses the first and last available shared dates.",
-            "Dividends, fees, taxes, and slippage are excluded.",
+            "Returns use provider-adjusted prices, which may reflect dividend and stock-split adjustments; dividends are not modeled as separate cash flows.",
+            "Fees, taxes, slippage, and other trading effects are not modeled.",
             "Historical outcomes do not predict future losses or recovery.",
         ],
     }

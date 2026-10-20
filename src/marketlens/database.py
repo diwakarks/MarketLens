@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -331,6 +332,7 @@ def import_market_data(
         raise
 
 
+
 def download_and_import_market_data(
     ticker: str,
     *,
@@ -378,7 +380,7 @@ def download_and_import_market_data(
         history = yf.Ticker(ticker).history(
             period="max",
             interval="1d",
-            auto_adjust=False,
+            auto_adjust=True,
         )
 
         if history.empty:
@@ -443,7 +445,7 @@ def download_and_import_market_data(
             raise ValueError("Provider volume exceeds the supported range.")
 
         if (candidate["High"] < candidate["Low"]).any():
-            raise ValueError("High cannot be lower than Low.")
+            raise ValueError("Provider data contains invalid OHLC values.")
 
         if (
             (candidate["High"] < candidate["Open"])
@@ -455,21 +457,6 @@ def download_and_import_market_data(
 
         latest_trade_date = max(candidate["Date"])
         rows_downloaded = len(candidate)
-
-        csv_path = RAW_DATA_DIR / f"{ticker}_daily.csv"
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Validate first; replace the existing CSV only after writing succeeds.
-        temp_path = csv_path.with_name(
-            f"{csv_path.stem}.download.tmp.csv"
-        )
-
-        try:
-            candidate.to_csv(temp_path, index=False)
-            temp_path.replace(csv_path)
-        finally:
-            if temp_path.exists():
-                temp_path.unlink()
 
     except Exception as error:
         try:
@@ -499,12 +486,46 @@ def download_and_import_market_data(
             f"but success logging failed: {log_error}"
         )
 
-    return import_market_data(
-        ticker,
-        name=name.strip(),
-        exchange=exchange.strip(),
-        currency=currency.strip(),
+    csv_path = RAW_DATA_DIR / f"{ticker}_daily.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    staged_file = tempfile.NamedTemporaryFile(
+        prefix=f".{ticker}_",
+        suffix="_candidate.csv",
+        dir=csv_path.parent,
+        delete=False,
     )
+    staged_path = Path(staged_file.name)
+    staged_file.close()
+
+    keep_candidate = False
+
+    try:
+        candidate.to_csv(staged_path, index=False)
+
+        # Import the candidate before promoting it to the active CSV.
+        rows_imported = import_market_data(
+            ticker,
+            name=name.strip(),
+            exchange=exchange.strip(),
+            currency=currency.strip(),
+            csv_path=staged_path,
+        )
+
+        try:
+            staged_path.replace(csv_path)
+        except OSError as error:
+            keep_candidate = True
+            raise RuntimeError(
+                "Database import succeeded, but CSV promotion failed. "
+                f"The candidate was retained at {staged_path}"
+            ) from error
+
+        return rows_imported
+
+    finally:
+        if not keep_candidate:
+            staged_path.unlink(missing_ok=True)
 
 
 def load_market_data_from_db(ticker: str = "AAPL") -> pd.DataFrame:
