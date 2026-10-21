@@ -238,7 +238,7 @@ def import_stock(
     exchange: str,
     currency: str = "INR",
 ) -> dict:
-    """Download and import historical prices for an Indian equity."""
+    """Download and import historical prices for a supported instrument."""
     try:
         rows_imported = download_and_import_market_data(
             ticker,

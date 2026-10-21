@@ -479,3 +479,87 @@ def test_historical_portfolio_stress_uses_database_data(
     assert response.status_code == 200
     assert response.json() == {"source": "database"}
     assert loaded_tickers == ["AAPL", "MSFT"]
+
+
+def test_import_stock_success(monkeypatch):
+    def fake_download_and_import(
+        ticker, *, name, exchange, currency
+    ):
+        assert ticker == "aapl"
+        assert name == "Apple Inc."
+        assert exchange == "NASDAQ"
+        assert currency == "USD"
+        return 250
+
+    monkeypatch.setattr(
+        api,
+        "download_and_import_market_data",
+        fake_download_and_import,
+    )
+
+    response = client.post(
+        "/stocks/import",
+        params={
+            "ticker": "aapl",
+            "name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ticker": "AAPL",
+        "rows_imported": 250,
+        "status": "success",
+    }
+
+
+def test_import_stock_invalid_metadata_returns_400(monkeypatch):
+    def fake_download_and_import(*args, **kwargs):
+        raise ValueError("Instrument metadata is invalid.")
+
+    monkeypatch.setattr(
+        api,
+        "download_and_import_market_data",
+        fake_download_and_import,
+    )
+
+    response = client.post(
+        "/stocks/import",
+        params={
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "exchange": "NYSE",
+            "currency": "USD",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Instrument metadata is invalid."
+
+
+def test_import_stock_unexpected_failure_returns_502(monkeypatch):
+    def fake_download_and_import(*args, **kwargs):
+        raise RuntimeError("Internal failure details")
+
+    monkeypatch.setattr(
+        api,
+        "download_and_import_market_data",
+        fake_download_and_import,
+    )
+
+    response = client.post(
+        "/stocks/import",
+        params={
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Unable to download or import market data."
+    )
