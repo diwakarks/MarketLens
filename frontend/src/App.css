@@ -1242,7 +1242,7 @@ p {
 }
 @media (max-width: 650px) {
   .navigation {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1256,7 +1256,7 @@ p {
 
 .risk-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-top: 24px;
 }
@@ -2179,5 +2179,178 @@ p {
   .stock-search-results li {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+
+/* =========================================
+   MarketLens — shared control system
+   ========================================= */
+
+:root {
+  --ml-bg: #0a0f18;
+  --ml-surface: #101722;
+  --ml-input: #0d141f;
+  --ml-border: #334153;
+  --ml-border-hover: #52647b;
+  --ml-text: #e8edf6;
+  --ml-muted: #93a1b6;
+  --ml-accent: #a5f3cf;
+  --ml-accent-text: #10271f;
+  --ml-focus: rgba(165, 243, 207, 0.2);
+}
+
+/* Form controls */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+  border: 1px solid var(--ml-border);
+  border-radius: 9px;
+  background-color: var(--ml-input);
+  color: var(--ml-text);
+  font: inherit;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select {
+  min-height: 44px;
+  padding: 10px 13px;
+}
+
+textarea {
+  min-height: 100px;
+  padding: 12px 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #8290a5;
+  opacity: 1;
+}
+
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: var(--ml-surface);
+  color: var(--ml-text);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ml-accent);
+  outline-offset: 2px;
+  border-color: var(--ml-accent);
+  box-shadow: 0 0 0 3px var(--ml-focus);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Consistent baseline for all buttons */
+button {
+  box-sizing: border-box;
+  min-height: 42px;
+  padding: 10px 16px;
+  border: 1px solid var(--ml-border);
+  border-radius: 9px;
+  background: #172131;
+  color: var(--ml-text);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--ml-border-hover);
+  background-color: #202d3e;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--ml-accent);
+  outline-offset: 3px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Preserve the existing mint primary-action identity */
+.primary-button,
+.portfolio-run-button {
+  border-color: var(--ml-accent);
+  background: var(--ml-accent);
+  color: var(--ml-accent-text);
+  font-weight: 700;
+}
+
+.primary-button:hover:not(:disabled),
+.portfolio-run-button:hover:not(:disabled) {
+  border-color: #c2ffe4;
+  background: #c2ffe4;
+  color: var(--ml-accent-text);
+}
+
+/* Preserve the destructive action's visual meaning */
+.portfolio-remove-button {
+  border-color: #47303a;
+  background: transparent;
+  color: #fca5a5;
+}
+
+.portfolio-remove-button:hover:not(:disabled) {
+  border-color: #75404b;
+  background: #28171c;
+  color: #ffc0c5;
+}
+
+/* Consistent native date picker appearance */
+input[type="date"] {
+  color-scheme: dark;
+}
+
+/* Avoid awkward overflow in long labels and controls */
+input,
+select,
+textarea,
+button {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input,
+  select,
+  textarea,
+  button {
+    transition: none;
+  }
+
+  button:active:not(:disabled) {
+    transform: none;
   }
 }

@@ -619,23 +619,11 @@ def calculate_beta_alpha(
     }
 
 
-def calculate_value_at_risk(
-    data,
-    confidence_level: float = 0.95,
-) -> float:
-    """
-    Calculate historical Value at Risk (VaR) from daily closing prices.
-
-    Returns:
-        A decimal representing the estimated loss threshold.
-        Example: 0.02 means 2% VaR.
-
-    The calculation uses the historical return quantile at
-    (1 - confidence_level).
-    """
-    import numpy as np
-    import pandas as pd
-
+def _prepare_risk_metric_returns(
+    data: pd.DataFrame,
+    confidence_level: float,
+) -> pd.Series:
+    """Validate closing prices and return daily percentage returns."""
     if "Close" not in data.columns:
         raise ValueError("Data must contain a 'Close' column.")
 
@@ -656,13 +644,34 @@ def calculate_value_at_risk(
     if (prices <= 0).any():
         raise ValueError("Closing prices must be positive.")
 
-    daily_returns = prices.pct_change().dropna()
+    returns = prices.pct_change().dropna()
 
-    if daily_returns.empty:
+    if returns.empty:
         raise ValueError("Insufficient data to calculate returns.")
 
-    return float(-daily_returns.quantile(1 - confidence_level))
+    return returns
 
+
+def calculate_value_at_risk(
+    data,
+    confidence_level: float = 0.95,
+) -> float:
+    """
+    Calculate historical Value at Risk (VaR) from daily closing prices.
+
+    Returns:
+        A decimal representing the estimated loss threshold.
+        Example: 0.02 means 2% VaR.
+
+    The calculation uses the historical return quantile at
+    (1 - confidence_level).
+    """
+    daily_returns = _prepare_risk_metric_returns(
+        data,
+        confidence_level,
+    )
+
+    return float(-daily_returns.quantile(1 - confidence_level))
 
 def calculate_expected_shortfall(
     data,
@@ -674,32 +683,10 @@ def calculate_expected_shortfall(
     Returns a decimal loss measure. For example, 0.03 means
     a 3% average loss in the worst historical return tail.
     """
-    import numpy as np
-
-    if "Close" not in data.columns:
-        raise ValueError("Data must contain a 'Close' column.")
-
-    if not 0 < confidence_level < 1:
-        raise ValueError("Confidence level must be between 0 and 1.")
-
-    if data.empty or len(data) < 2:
-        raise ValueError("At least two closing prices are required.")
-
-    if data.index.has_duplicates:
-        raise ValueError("Data must not contain duplicate dates.")
-
-    prices = data["Close"].astype(float)
-
-    if not np.isfinite(prices.to_numpy()).all():
-        raise ValueError("Closing prices must be finite and non-missing.")
-
-    if (prices <= 0).any():
-        raise ValueError("Closing prices must be positive.")
-
-    returns = prices.pct_change().dropna()
-
-    if returns.empty:
-        raise ValueError("Insufficient data to calculate returns.")
+    returns = _prepare_risk_metric_returns(
+        data,
+        confidence_level,
+    )
 
     threshold = returns.quantile(1 - confidence_level)
     tail_returns = returns[returns <= threshold]
@@ -708,6 +695,42 @@ def calculate_expected_shortfall(
         raise ValueError("Insufficient tail observations to calculate expected shortfall.")
 
     return float(-tail_returns.mean())
+
+def _build_close_series(
+    market_data: dict[str, pd.DataFrame],
+    *,
+    normalize_dates: bool = False,
+) -> list[pd.Series]:
+    """Validate asset closing prices and return sorted close-price series."""
+    close_series = []
+
+    for ticker, data in market_data.items():
+        if "Close" not in data.columns:
+            raise ValueError(f"{ticker} data must contain a Close column.")
+
+        if data.empty or data.index.has_duplicates:
+            raise ValueError(
+                f"{ticker} data must be non-empty with unique dates."
+            )
+
+        close = pd.to_numeric(data["Close"], errors="coerce").sort_index()
+
+        if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
+            raise ValueError(
+                f"{ticker} closing prices must be finite and positive."
+            )
+
+        if normalize_dates:
+            close.index = pd.to_datetime(close.index)
+
+            if close.index.tz is not None:
+                close.index = close.index.tz_localize(None)
+
+            close.index = close.index.normalize()
+
+        close_series.append(close.rename(ticker))
+
+    return close_series
 
 
 def calculate_portfolio_analytics(
@@ -756,27 +779,7 @@ def calculate_portfolio_analytics(
         raise ValueError(
             "Risk-free rate must be finite and non-negative."
         )
-
-    close_series = []
-
-    for ticker, data in market_data.items():
-        if "Close" not in data.columns:
-            raise ValueError(f"{ticker} data must contain a Close column.")
-
-        if data.empty or data.index.has_duplicates:
-            raise ValueError(
-                f"{ticker} data must be non-empty with unique dates."
-            )
-
-        close = pd.to_numeric(data["Close"], errors="coerce").sort_index()
-
-        if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
-            raise ValueError(
-                f"{ticker} closing prices must be finite and positive."
-            )
-
-        close_series.append(close.rename(ticker))
-
+    close_series = _build_close_series(market_data)
     prices = pd.concat(close_series, axis=1, join="inner").sort_index()
 
     if len(prices) < 3:
@@ -954,27 +957,11 @@ def calculate_portfolio_analytics(
     }
 
 
-def calculate_portfolio_scenario(
+def _validate_portfolio_weights(
     weights: dict[str, float],
-    shocks: dict[str, float],
-    initial_value: float = 10_000.0,
-) -> dict:
-    """
-    Calculate the immediate portfolio impact of hypothetical asset returns.
-
-    Weights are current portfolio weights; shocks are decimal returns
-    (for example, -0.20 means a hypothetical 20% decline).
-
-    This is a one-step scenario calculation, not a forecast.
-    """
-    if not weights:
-        raise ValueError("At least one portfolio asset is required.")
-
-    if set(weights) != set(shocks):
-        raise ValueError(
-            "Scenario shocks must match the supplied portfolio tickers."
-        )
-
+    initial_value: float,
+) -> tuple[dict[str, float], float]:
+    """Validate portfolio weights and initial value, returning normalized values."""
     if (
         isinstance(initial_value, bool)
         or not isinstance(initial_value, (int, float))
@@ -1003,6 +990,34 @@ def calculate_portfolio_scenario(
     if not np.isclose(sum(normalized_weights.values()), 1.0):
         raise ValueError("Portfolio weights must sum to 1.0 (100%).")
 
+    return normalized_weights, float(initial_value)
+
+
+def calculate_portfolio_scenario(
+    weights: dict[str, float],
+    shocks: dict[str, float],
+    initial_value: float = 10_000.0,
+) -> dict:
+    """
+    Calculate the immediate portfolio impact of hypothetical asset returns.
+
+    Weights are current portfolio weights; shocks are decimal returns
+    (for example, -0.20 means a hypothetical 20% decline).
+
+    This is a one-step scenario calculation, not a forecast.
+    """
+    if not weights:
+        raise ValueError("At least one portfolio asset is required.")
+
+    if set(weights) != set(shocks):
+        raise ValueError(
+            "Scenario shocks must match the supplied portfolio tickers."
+        )
+
+    normalized_weights, initial_value = _validate_portfolio_weights(
+        weights,
+        initial_value,
+    )
     normalized_shocks = {}
 
     for ticker, shock in shocks.items():
@@ -1087,55 +1102,11 @@ def calculate_historical_portfolio_scenario(
     if requested_start > requested_end:
         raise ValueError("Start date must not be after end date.")
 
-    if (
-        isinstance(initial_value, bool)
-        or not isinstance(initial_value, (int, float))
-        or not np.isfinite(initial_value)
-        or initial_value <= 0
-    ):
-        raise ValueError(
-            "Initial portfolio value must be positive and finite."
-        )
-
-    normalized_weights = {}
-
-    for ticker, weight in weights.items():
-        if (
-            isinstance(weight, bool)
-            or not isinstance(weight, (int, float))
-            or not np.isfinite(weight)
-            or weight < 0
-        ):
-            raise ValueError(
-                "Portfolio weights must be finite and non-negative."
-            )
-
-        normalized_weights[ticker] = float(weight)
-
-    if not np.isclose(sum(normalized_weights.values()), 1.0):
-        raise ValueError("Portfolio weights must sum to 1.0 (100%).")
-
-    close_series = []
-
-    for ticker, data in market_data.items():
-        if "Close" not in data.columns:
-            raise ValueError(f"{ticker} data must contain a Close column.")
-
-        if data.empty or data.index.has_duplicates:
-            raise ValueError(
-                f"{ticker} data must be non-empty with unique dates."
-            )
-
-        close = pd.to_numeric(data["Close"], errors="coerce").sort_index()
-
-        if not np.isfinite(close.to_numpy()).all() or (close <= 0).any():
-            raise ValueError(
-                f"{ticker} closing prices must be finite and positive."
-            )
-
-        # Normalize timestamps to calendar dates for consistent filtering.
-        close.index = pd.to_datetime(close.index).normalize()
-        close_series.append(close.rename(ticker))
+    normalized_weights, initial_value = _validate_portfolio_weights(
+        weights,
+        initial_value,
+    )
+    close_series = _build_close_series(market_data)
 
     prices = pd.concat(close_series, axis=1, join="inner").sort_index()
     prices = prices.loc[
@@ -1196,6 +1167,34 @@ def calculate_historical_portfolio_scenario(
         ],
     }
 
+
+def _validate_portfolio_inputs(
+    market_data: dict[str, pd.DataFrame],
+    weights: dict[str, float],
+    initial_value: float,
+) -> None:
+    """Validate shared portfolio inputs for historical analyses."""
+    if not market_data:
+        raise ValueError("At least one portfolio asset is required.")
+
+    if set(market_data) != set(weights):
+        raise ValueError("Portfolio tickers and weights must match.")
+
+    if not np.isfinite(initial_value) or initial_value <= 0:
+        raise ValueError("Initial value must be finite and positive.")
+
+    weight_values = np.asarray(list(weights.values()), dtype=float)
+
+    if (
+        not np.isfinite(weight_values).all()
+        or (weight_values < 0).any()
+        or not np.isclose(weight_values.sum(), 1.0)
+    ):
+        raise ValueError(
+            "Weights must be finite, non-negative, and sum to 1."
+        )
+
+
 def calculate_portfolio_benchmark_comparison(
     market_data: dict[str, pd.DataFrame],
     weights: dict[str, float],
@@ -1210,24 +1209,11 @@ def calculate_portfolio_benchmark_comparison(
     the benchmark. Portfolio weights are initial weights; the portfolio
     is not rebalanced during the evaluation period.
     """
-    if not market_data:
-        raise ValueError("At least one portfolio asset is required.")
-
-    if set(market_data) != set(weights):
-        raise ValueError("Portfolio tickers and weights must match.")
-
-    if not np.isfinite(initial_value) or initial_value <= 0:
-        raise ValueError("Initial value must be finite and positive.")
-
-    weight_values = np.asarray(list(weights.values()), dtype=float)
-    if (
-        not np.isfinite(weight_values).all()
-        or (weight_values < 0).any()
-        or not np.isclose(weight_values.sum(), 1.0)
-    ):
-        raise ValueError(
-            "Weights must be finite, non-negative, and sum to 1."
-        )
+    _validate_portfolio_inputs(
+        market_data,
+        weights,
+        initial_value,
+    )
 
     if benchmark_data.empty or "Close" not in benchmark_data.columns:
         raise ValueError("Benchmark data must contain a non-empty Close series.")
@@ -1339,23 +1325,11 @@ def calculate_historical_portfolio_stress(
     initial_value: float = 10_000.0,
 ) -> dict:
     """Analyze portfolio losses, drawdown, and recovery in a historical window."""
-    if not market_data:
-        raise ValueError("At least one portfolio asset is required.")
-
-    if set(market_data) != set(weights):
-        raise ValueError("Portfolio tickers and weights must match.")
-
-    if not np.isfinite(initial_value) or initial_value <= 0:
-        raise ValueError("Initial value must be finite and positive.")
-
-    weight_values = np.asarray(list(weights.values()), dtype=float)
-    if (
-        not np.isfinite(weight_values).all()
-        or (weight_values < 0).any()
-        or not np.isclose(weight_values.sum(), 1.0)
-    ):
-        raise ValueError("Weights must be finite, non-negative, and sum to 1.")
-
+    _validate_portfolio_inputs(
+        market_data,
+        weights,
+        initial_value,
+    )
     start = pd.Timestamp(start_date).normalize()
     end = pd.Timestamp(end_date).normalize()
 
@@ -1369,24 +1343,26 @@ def calculate_historical_portfolio_stress(
 
     if start > end:
         raise ValueError("start_date must be on or before end_date")
-    close_series = []
-    for ticker, frame in market_data.items():
-        if "Close" not in frame.columns:
-            raise ValueError(f"{ticker} data must contain a Close column.")
 
-        close = pd.to_numeric(frame["Close"], errors="coerce").copy()
-
-        # Convert timezone-aware market timestamps to timezone-naive dates.
-        close.index = pd.to_datetime(close.index, utc=True).tz_localize(None).normalize()
-        if not close.index.is_unique:
-            raise ValueError(f"{ticker} data must have unique dates.")
-        close_series.append(close.rename(ticker))
+    close_series = _build_close_series(
+        market_data,
+        normalize_dates=True,
+    )
 
     prices = pd.concat(close_series, axis=1, join="inner").sort_index()
+
     prices = prices.loc[
-        (prices.index >= start.normalize())
-        & (prices.index <= end.normalize())
-    ].dropna()
+        (prices.index >= start)
+        & (prices.index <= end)
+    ]
+
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+
+    prices = prices.loc[
+        (prices.index >= start)
+        & (prices.index <= end)
+    ]
 
     if len(prices) < 2:
         raise ValueError(

@@ -107,6 +107,8 @@ def get_benchmark_details(ticker: str) -> dict[str, str]:
         "name": "S&P 500",
     }
 
+
+
 def get_portfolio_benchmark_details(
     tickers: list[str],
 ) -> dict[str, str]:
@@ -136,6 +138,69 @@ def get_portfolio_benchmark_details(
         )
 
     return {"ticker": "^GSPC", "name": "S&P 500"}
+
+
+def _validate_portfolio_tickers_and_weights(
+    tickers: list[str],
+    weights: list[float],
+) -> list[str]:
+    """Validate portfolio ticker/weight lengths and normalize tickers."""
+    if len(tickers) != len(weights):
+        raise HTTPException(
+            status_code=400,
+            detail="Tickers and weights must have the same length.",
+        )
+
+    normalized_tickers = [ticker.strip().upper() for ticker in tickers]
+
+    if not normalized_tickers or any(not ticker for ticker in normalized_tickers):
+        raise HTTPException(
+            status_code=400,
+            detail="At least one valid portfolio ticker is required.",
+        )
+
+    if len(set(normalized_tickers)) != len(normalized_tickers):
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio tickers must be unique.",
+        )
+
+    return normalized_tickers
+
+
+def _normalize_stock_ticker(ticker: str) -> str:
+    """Normalize a ticker and reject empty symbols."""
+    ticker = ticker.strip().upper()
+
+    if not ticker:
+        raise HTTPException(
+            status_code=400,
+            detail="Ticker symbol cannot be empty.",
+        )
+
+    return ticker
+
+
+def _load_filtered_stock_data(
+    ticker: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> pd.DataFrame:
+    """Load a stock's market data and apply the requested date range."""
+    try:
+        market_data = load_market_data_from_db(ticker)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    return filter_market_data_by_date(
+        market_data,
+        start_date,
+        end_date,
+    )
+
 
 @app.get("/health", tags=["System"])
 def health_check() -> dict:
@@ -292,13 +357,7 @@ def get_stock_metrics(
     end_date: date | None = None,
 ) -> dict:
     """Calculate historical performance, risk, and Sharpe ratio."""
-    ticker = ticker.strip().upper()
-
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
+    ticker = _normalize_stock_ticker(ticker)
     benchmark = get_benchmark_details(ticker)
 
     try:
@@ -309,8 +368,8 @@ def get_stock_metrics(
             detail=str(exc),
         ) from exc
 
-    market_data = filter_market_data_by_date(
-        market_data,
+    market_data = _load_filtered_stock_data(
+        ticker,
         start_date,
         end_date,
     )
@@ -369,24 +428,12 @@ def get_stock_history(
     end_date: date | None = None,
 ) -> dict:
     """Return historical daily OHLCV data for a registered stock."""
-    ticker = ticker.strip().upper()
+    ticker = _normalize_stock_ticker(ticker)
 
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
-
-    try:
-        market_data = load_market_data_from_db(ticker)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        ) from exc
-
-    market_data = filter_market_data_by_date(
-        market_data, start_date, end_date
+    market_data = _load_filtered_stock_data(
+        ticker,
+        start_date,
+        end_date,
     )
 
     history = market_data.reset_index()
@@ -454,24 +501,11 @@ def get_stock_analytics_series(
     end_date: date | None = None,
 ) -> dict:
     """Return cumulative returns and drawdown for a date range."""
-    ticker = ticker.strip().upper()
-
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
-
-    try:
-        market_data = load_market_data_from_db(ticker)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        ) from exc
-
-    market_data = filter_market_data_by_date(
-        market_data, start_date, end_date
+    ticker = _normalize_stock_ticker(ticker)
+    market_data = _load_filtered_stock_data(
+        ticker,
+        start_date,
+        end_date,
     )
 
     analysis, _ = calculate_metrics(market_data)
@@ -508,29 +542,19 @@ def get_benchmark_comparison(
     end_date: date | None = None,
 ) -> dict:
     """Compare a stock's cumulative return against the S&P 500."""
-    ticker = ticker.strip().upper()
-
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
+    ticker = _normalize_stock_ticker(ticker)
     benchmark = get_benchmark_details(ticker)
 
-    try:
-        stock_data = load_market_data_from_db(ticker)
-        benchmark_data = load_market_data_from_db(benchmark["ticker"])
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=str(exc),
-        ) from exc
-
-    stock_data = filter_market_data_by_date(
-        stock_data, start_date, end_date
+    stock_data = _load_filtered_stock_data(
+        ticker,
+        start_date,
+        end_date,
     )
-    benchmark_data = filter_market_data_by_date(
-        benchmark_data, start_date, end_date
+
+    benchmark_data = _load_filtered_stock_data(
+        benchmark["ticker"],
+        start_date,
+        end_date,
     )
 
     try:
@@ -577,24 +601,21 @@ def get_drawdown_recovery(
     end_date: date | None = None,
 ) -> dict:
     """Compare stock and benchmark drawdown/recovery on shared dates."""
-    ticker = ticker.strip().upper()
+    ticker = _normalize_stock_ticker(ticker)
 
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
     benchmark = get_benchmark_details(ticker)
 
     try:
-        stock_data = load_market_data_from_db(ticker)
-        benchmark_data = load_market_data_from_db(benchmark["ticker"])
-
-        stock_data = filter_market_data_by_date(
-            stock_data, start_date, end_date
+        stock_data = _load_filtered_stock_data(
+            ticker,
+            start_date,
+            end_date,
         )
-        benchmark_data = filter_market_data_by_date(
-            benchmark_data, start_date, end_date
+
+        benchmark_data = _load_filtered_stock_data(
+            benchmark["ticker"],
+            start_date,
+            end_date,
         )
 
         aligned = stock_data[["Close"]].rename(
@@ -676,27 +697,21 @@ def get_market_insights(
     end_date: date | None = None,
 ) -> dict:
     """Return deterministic stock-versus-benchmark insights."""
-    ticker = ticker.strip().upper()
-
-    if not ticker:
-        raise HTTPException(
-            status_code=400,
-            detail="Ticker symbol cannot be empty.",
-        )
+    ticker = _normalize_stock_ticker(ticker)
 
     benchmark = get_benchmark_details(ticker)
 
     try:
-        stock_data = load_market_data_from_db(ticker)
-        benchmark_data = load_market_data_from_db(
-            benchmark["ticker"]
+        stock_data = _load_filtered_stock_data(
+            ticker,
+            start_date,
+            end_date,
         )
 
-        stock_data = filter_market_data_by_date(
-            stock_data, start_date, end_date
-        )
-        benchmark_data = filter_market_data_by_date(
-            benchmark_data, start_date, end_date
+        benchmark_data = _load_filtered_stock_data(
+            benchmark["ticker"],
+            start_date,
+            end_date,
         )
 
         return generate_market_insights(
@@ -715,6 +730,55 @@ def get_market_insights(
             detail=str(exc),
         ) from exc
 
+
+def _validate_model_portfolio_tickers(
+    tickers: list[str],
+    weights: list[float],
+) -> list[str]:
+    """Validate and normalize portfolio tickers for API request models."""
+    if len(tickers) != len(weights):
+        raise ValueError("Tickers and weights must have equal lengths.")
+
+    normalized = [ticker.strip().upper() for ticker in tickers]
+
+    if any(not ticker for ticker in normalized):
+        raise ValueError("Ticker symbols cannot be empty.")
+
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("Duplicate ticker symbols are not allowed.")
+
+    return normalized
+
+def _validate_model_portfolio_weights(weights: list[float]) -> None:
+    """Validate portfolio weights shared by request models."""
+    if any(not np.isfinite(weight) for weight in weights):
+        raise ValueError("Weights must be finite.")
+
+    if any(weight < 0 for weight in weights):
+        raise ValueError("Weights must be non-negative.")
+
+    if not np.isclose(sum(weights), 1.0):
+        raise ValueError("Weights must sum to 1.0 (100%).")
+
+def _validate_model_portfolio_request(
+    tickers: list[str],
+    weights: list[float],
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[str]:
+    """Validate shared portfolio request fields."""
+    normalized_tickers = _validate_model_portfolio_tickers(
+        tickers,
+        weights,
+    )
+    _validate_model_portfolio_weights(weights)
+
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("start_date must be on or before end_date.")
+
+    return normalized_tickers
+
+
 class PortfolioAnalyticsRequest(BaseModel):
     tickers: list[str] = Field(min_length=1)
     weights: list[float] = Field(min_length=1)
@@ -725,26 +789,10 @@ class PortfolioAnalyticsRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_portfolio(self):
-        if len(self.tickers) != len(self.weights):
-            raise ValueError("Tickers and weights must have equal lengths.")
-
-        normalized = [ticker.strip().upper() for ticker in self.tickers]
-        if any(not ticker for ticker in normalized):
-            raise ValueError("Ticker symbols cannot be empty.")
-
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("Duplicate ticker symbols are not allowed.")
-
-        if any(not np.isfinite(weight) for weight in self.weights):
-            raise ValueError("Weights must be finite.")
-
-        if any(weight < 0 for weight in self.weights):
-            raise ValueError("Weights must be non-negative.")
-
-        if not np.isclose(sum(self.weights), 1.0):
-            raise ValueError("Weights must sum to 1.0 (100%).")
-
-        self.tickers = normalized
+        self.tickers = _validate_model_portfolio_request(
+            self.tickers,
+            self.weights,
+        )
         return self
 
 
@@ -894,25 +942,10 @@ class PortfolioBenchmarkComparisonRequest(BaseModel):
 def portfolio_benchmark_comparison(
     request: PortfolioBenchmarkComparisonRequest,
 ):
-    if len(request.tickers) != len(request.weights):
-        raise HTTPException(
-            status_code=400,
-            detail="Tickers and weights must have the same length.",
-        )
-
-    tickers = [ticker.strip().upper() for ticker in request.tickers]
-
-    if not tickers or any(not ticker for ticker in tickers):
-        raise HTTPException(
-            status_code=400,
-            detail="At least one valid portfolio ticker is required.",
-        )
-
-    if len(set(tickers)) != len(tickers):
-        raise HTTPException(
-            status_code=400,
-            detail="Portfolio tickers must be unique.",
-        )
+    tickers = _validate_portfolio_tickers_and_weights(
+        request.tickers,
+        request.weights,
+    )
 
     benchmark_tickers = {"^GSPC", "^NSEI"}
 
@@ -977,25 +1010,10 @@ class HistoricalPortfolioStressRequest(BaseModel):
 def historical_portfolio_stress(
     request: HistoricalPortfolioStressRequest,
 ):
-    if len(request.tickers) != len(request.weights):
-        raise HTTPException(
-            status_code=400,
-            detail="Tickers and weights must have the same length.",
-        )
-
-    tickers = [ticker.strip().upper() for ticker in request.tickers]
-
-    if not tickers or any(not ticker for ticker in tickers):
-        raise HTTPException(
-            status_code=400,
-            detail="At least one valid portfolio ticker is required.",
-        )
-
-    if len(set(tickers)) != len(tickers):
-        raise HTTPException(
-            status_code=400,
-            detail="Portfolio tickers must be unique.",
-        )
+    tickers = _validate_portfolio_tickers_and_weights(
+        request.tickers,
+        request.weights,
+    )
 
     if request.start_date > request.end_date:
         raise HTTPException(
@@ -1123,37 +1141,13 @@ class PortfolioAIAnalystRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_portfolio(self):
-        if len(self.tickers) != len(self.weights):
-            raise ValueError(
-                "Tickers and weights must have equal lengths."
-            )
-
-        self.tickers = [ticker.strip().upper() for ticker in self.tickers]
-
-        if any(not ticker for ticker in self.tickers):
-            raise ValueError("Ticker symbols cannot be empty.")
-
-        if len(set(self.tickers)) != len(self.tickers):
-            raise ValueError("Duplicate ticker symbols are not allowed.")
-
-        if any(not np.isfinite(weight) or weight < 0
-               for weight in self.weights):
-            raise ValueError("Weights must be finite and non-negative.")
-
-        if not np.isclose(sum(self.weights), 1.0):
-            raise ValueError("Weights must sum to 1.0 (100%).")
-
-        if (
-            self.start_date
-            and self.end_date
-            and self.start_date > self.end_date
-        ):
-            raise ValueError(
-                "start_date must be on or before end_date."
-            )
-
+        self.tickers = _validate_model_portfolio_request(
+            self.tickers,
+            self.weights,
+            self.start_date,
+            self.end_date,
+        )
         return self
-
 
 @app.post("/ai/portfolio-ask", tags=["AI Analyst"])
 def ask_portfolio_analyst(
