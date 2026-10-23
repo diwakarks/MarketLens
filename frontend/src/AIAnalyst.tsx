@@ -17,8 +17,8 @@ const API_BASE_URL = (
 
 const SUGGESTED_QUESTIONS = [
   "Explain the historical risk metrics in simple terms.",
-  "What does the maximum drawdown tell me?",
-  "Explain the relationship between return and volatility.",
+  "What does the maximum drawdown tell me about downside risk?",
+  "How does this stock perform relative to the NIFTY 50?",
 ];
 
 function formatMetricName(name: string): string {
@@ -44,7 +44,7 @@ function formatMetricValue(name: string, value: number | string): string {
 }
 
 export default function AIAnalyst() {
-  const [ticker, setTicker] = useState("AAPL");
+  const [ticker, setTicker] = useState("TCS.NS");
   const [question, setQuestion] = useState(SUGGESTED_QUESTIONS[0]);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -133,7 +133,7 @@ export default function AIAnalyst() {
               maxLength={15}
               required
               aria-label="Stock ticker"
-              placeholder="AAPL"
+              placeholder="TCS.NS"
             />
           </label>
 

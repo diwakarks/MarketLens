@@ -95,8 +95,9 @@ function App() {
 const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
   {},
 );
-  const [selectedStock, setSelectedStock] = useState("AAPL");
+  const [selectedStock, setSelectedStock] = useState("TCS.NS");
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("3M");
+  const [dataVersion, setDataVersion] = useState(0);
   const [metrics, setMetrics] = useState<StockMetrics | null>(null);
   const [metricsBenchmarkName, setMetricsBenchmarkName] = useState("Benchmark");
 
@@ -131,7 +132,14 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
           );
         }
 
-        const preferred = ["AAPL", "MSFT"].filter((ticker) =>
+        const preferred = [
+          "TCS.NS",
+          "GROWW.NS",
+          "APOLLO.NS",
+          "ETERNAL.NS",
+          "AAPL",
+          "MSFT",
+        ].filter((ticker) =>
           result.some((stock) => stock.ticker === ticker),
         );
 
@@ -150,7 +158,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
       setSelectedStock((current) =>
         result.some((stock) => stock.ticker === current)
           ? current
-          : (result[0]?.ticker ?? current),
+          : (result[0]?.ticker ?? "TCS.NS"),
       );
     } catch (error) {
       setStocksError(
@@ -205,13 +213,12 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     null,
   );
 
-  const [portfolioInitialValue, setPortfolioInitialValue] = useState("10000");
-  const [portfolioRiskFreeRate, setPortfolioRiskFreeRate] = useState("2");
+  const [portfolioInitialValue, setPortfolioInitialValue] = useState("100000");
+  const [portfolioRiskFreeRate, setPortfolioRiskFreeRate] = useState("6.5");
   const [portfolioResult, setPortfolioResult] =
     useState<PortfolioAnalyticsResponse | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState("");
-
 
   const [scenarioResult, setScenarioResult] =
     useState<PortfolioScenarioResponse | null>(null);
@@ -288,7 +295,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     return () => {
       cancelled = true;
     };
-  }, [selectedStock]);
+  }, [selectedStock, dataVersion]);
 
   useEffect(() => {
     if (!latestAvailableDate) return;
@@ -535,7 +542,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
   }, [selectedStock, startDate, endDate, latestAvailableDate]);
 
   const currency =
-    stocks.find((stock) => stock.ticker === selectedStock)?.currency || "USD";
+    stocks.find((stock) => stock.ticker === selectedStock)?.currency || "INR";
 
   useEffect(() => {
     let cancelled = false;
@@ -566,7 +573,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     return () => {
       cancelled = true;
     };
-  }, [selectedStock]);
+  }, [selectedStock, dataVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -597,7 +604,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     return () => {
       cancelled = true;
     };
-  }, [selectedStock]);
+  }, [selectedStock, dataVersion]);
 
 
   const portfolioWeightTotal = portfolioAssets.reduce(
@@ -1024,10 +1031,16 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
 
         {activePage === "data-status" && (
           <DataStatusPage
+            stocks={stocks}
+            selectedStock={selectedStock}
+            onSelectStock={setSelectedStock}
             freshness={freshness}
             freshnessError={freshnessError}
             refreshStatus={refreshStatus}
             refreshStatusError={refreshStatusError}
+            onRefreshSuccess={() => {
+              setDataVersion((version) => version + 1);
+            }}
           />
         )}
 

@@ -89,9 +89,10 @@ def _finish_provider_log(
         print(f"Warning: could not finish provider log: {error}")
 
 
+
 def _validate_history(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
     """Validate downloaded daily prices before saving them."""
-    if history.empty:
+    if history is None or history.empty:
         raise ValueError(
             f"No historical data returned for {ticker}. "
             "Check the symbol and data availability."
@@ -108,12 +109,14 @@ def _validate_history(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
     history.index = pd.to_datetime(history.index, errors="raise")
     history.index.name = "Date"
 
+    if history.index.hasnans:
+        raise ValueError("Invalid dates found in market data.")
+
+    # Daily bars should have unique dates.
     if history.index.has_duplicates:
         raise ValueError("Duplicate dates found in market data.")
 
-    if history.index.isna().any():
-        raise ValueError("Invalid dates found in market data.")
-
+    # Validate all required numeric fields.
     for column in REQUIRED_COLUMNS:
         history[column] = pd.to_numeric(history[column], errors="raise")
 
@@ -133,15 +136,22 @@ def _validate_history(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
     if (history["High"] < history["Low"]).any():
         raise ValueError("High cannot be lower than Low.")
 
-    if (
+    invalid_ohlc = (
         (history["High"] < history["Open"])
         | (history["High"] < history["Close"])
         | (history["Low"] > history["Open"])
         | (history["Low"] > history["Close"])
-    ).any():
+    )
+    if invalid_ohlc.any():
         raise ValueError("Invalid OHLC price relationships.")
 
-    return history.sort_index()
+    history = history.sort_index()
+
+    # Reject duplicate calendar dates even if timestamps differ.
+    if history.index.normalize().has_duplicates:
+        raise ValueError("Multiple daily bars found for the same date.")
+
+    return history
 
 
 def fetch_market_data(

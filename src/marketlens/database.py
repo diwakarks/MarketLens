@@ -699,15 +699,36 @@ def get_data_freshness(ticker: str = "AAPL") -> dict:
     provider = row[6]
     database_import = row[7]
 
+    stored_latest_date = (
+        row[5].isoformat() if row[5] else None
+    )
+
+    provider_latest_date = (
+        provider.get("latest_trade_date")
+        if provider
+        else None
+    )
+
+    if row[4] == 0:
+        freshness_status = "no_data"
+    elif provider_latest_date and stored_latest_date:
+        if provider_latest_date > stored_latest_date:
+            freshness_status = "import_behind"
+        elif provider_latest_date < stored_latest_date:
+            freshness_status = "database_ahead"
+        else:
+            freshness_status = "synchronized"
+    else:
+        freshness_status = "unverified"
+
     return {
         "ticker": row[0],
         "name": row[1],
         "exchange": row[2],
         "currency": row[3],
         "stored_rows": row[4],
-        "latest_trade_date": (
-            row[5].isoformat() if row[5] else None
-        ),
+        "latest_trade_date": stored_latest_date,
+        "provider_latest_trade_date": provider_latest_date,
         "last_successful_import": (
             row[8].isoformat() if row[8] else None
         ),
@@ -716,6 +737,7 @@ def get_data_freshness(ticker: str = "AAPL") -> dict:
         "data_status": (
             "available" if row[4] > 0 else "no_data"
         ),
+        "freshness_status": freshness_status,
     }
 
 

@@ -1,4 +1,6 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
 
 export interface Stock {
   ticker: string;
@@ -40,10 +42,17 @@ export interface DataFreshness {
   currency: string;
   stored_rows: number;
   latest_trade_date: string | null;
+  provider_latest_trade_date: string | null;
   last_successful_import: string | null;
   provider: RefreshStageStatus | null;
   database_import: RefreshStageStatus | null;
   data_status: "available" | "no_data";
+  freshness_status:
+    | "no_data"
+    | "stale"
+    | "database_ahead"
+    | "matched"
+    | "unknown";
 }
 
 
@@ -83,18 +92,30 @@ async function request<T>(
 }
 
 
-export function getStocks(): Promise<Stock[]> {
-  return request<Stock[]>("/stocks");
+export const DEFAULT_MARKET_MODE =
+  import.meta.env.VITE_MARKET_MODE ?? "IN";
+
+export function getStocks(market: string = DEFAULT_MARKET_MODE): Promise<Stock[]> {
+  const path = market && market !== "ALL"
+    ? `/stocks?market=${encodeURIComponent(market)}`
+    : "/stocks";
+  return request<Stock[]>(path);
 }
+
 
 export async function searchStocks(
   query: string,
 ): Promise<StockSearchResult[]> {
-  const params = new URLSearchParams({ q: query });
+  const params = new URLSearchParams({
+    q: query,
+    market: import.meta.env.VITE_MARKET_MODE ?? "IN",
+  });
+
   return request<StockSearchResult[]>(
     `/stocks/search?${params.toString()}`,
   );
 }
+
 
 export async function importStock(
   stock: StockSearchResult,
@@ -320,6 +341,25 @@ export async function getStockRefreshStatus(
 ): Promise<RefreshStatus> {
   return request<RefreshStatus>(
     `/stocks/${encodeURIComponent(ticker)}/refresh-status`,
+  );
+}
+
+export interface RefreshStockResponse {
+  ticker: string;
+  rows_imported: number;
+  status: string;
+  latest_trade_date: string | null;
+  last_successful_import: string | null;
+  freshness: DataFreshness;
+  refresh_status: RefreshStatus;
+}
+
+export async function refreshStock(
+  ticker: string,
+): Promise<RefreshStockResponse> {
+  return request<RefreshStockResponse>(
+    `/stocks/${encodeURIComponent(ticker)}/refresh`,
+    { method: "POST" },
   );
 }
 

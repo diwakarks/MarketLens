@@ -580,6 +580,8 @@ def test_portfolio_benchmark_comparison():
     assert result["excess_return"] == pytest.approx(-0.04)
     assert result["ending_value_difference"] == pytest.approx(-400.0)
     assert result["shared_trading_dates"] == 3
+    assert result["benchmark"]["ticker"] == "^GSPC"
+    assert result["benchmark"]["name"] == "S&P 500"
 
 def test_historical_portfolio_stress_reports_loss_and_drawdown():
     dates = pd.to_datetime([

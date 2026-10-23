@@ -19,13 +19,13 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export default function PortfolioAIAnalyst() {
-  const [tickers, setTickers] = useState("AAPL, MSFT");
+  const [tickers, setTickers] = useState("TCS.NS, GROWW.NS");
   const [weights, setWeights] = useState("60, 40");
   const [question, setQuestion] = useState(
-    "Explain my portfolio's risk and compare its performance with the benchmark"
+    "Explain my portfolio's risk and compare its performance with the NIFTY 50 benchmark"
   );
-  const [initialValue, setInitialValue] = useState("10000");
-  const [riskFreeRate, setRiskFreeRate] = useState("2");
+  const [initialValue, setInitialValue] = useState("100000");
+  const [riskFreeRate, setRiskFreeRate] = useState("6.5");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [result, setResult] = useState<PortfolioAIResponse | null>(null);
@@ -147,7 +147,7 @@ export default function PortfolioAIAnalyst() {
           <input
             value={tickers}
             onChange={(event) => setTickers(event.target.value)}
-            placeholder="AAPL, MSFT"
+            placeholder="TCS.NS, GROWW.NS"
             required
           />
         </label>

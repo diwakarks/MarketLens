@@ -223,7 +223,9 @@ export default function StockAnalysisPage({
                             domain={["auto", "auto"]}
                             width={65}
                             tickFormatter={(price: number) =>
-                              `$${price.toFixed(0)}`
+                              currency === "INR"
+                                ? `₹${price.toFixed(0)}`
+                                : `$${price.toFixed(0)}`
                             }
                             tick={{ fill: "#93a1b6", fontSize: 11 }}
                             axisLine={false}

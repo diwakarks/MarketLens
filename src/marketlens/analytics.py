@@ -1,4 +1,5 @@
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -68,7 +69,7 @@ def calculate_metrics(data: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         raise ValueError("Closing prices must be positive and non-missing.")
 
     # Percentage change from the previous trading session.
-    daily_returns = close.pct_change(fill_method=None)
+    daily_returns = close.pct_change(fill_method=None).dropna()
 
     # Growth of one unit invested at the first available closing price.
     cumulative_returns = (1 + daily_returns).cumprod() - 1
@@ -484,26 +485,29 @@ def calculate_sharpe_ratio(
     if (close <= 0).any():
         raise ValueError("Closing prices must be positive.")
 
-    daily_returns = close.pct_change().dropna()
+    daily_returns = close.pct_change(fill_method=None).dropna()
 
     if len(daily_returns) < 2:
         raise ValueError("At least three closing prices are required.")
 
     daily_risk_free_rate = (
         (1 + annual_risk_free_rate) ** (1 / periods_per_year) - 1
-    )
+        )
 
     excess_returns = daily_returns - daily_risk_free_rate
-    daily_volatility = daily_returns.std(ddof=1)
+    excess_volatility = excess_returns.std(ddof=1)
 
-    if daily_volatility == 0 or not math.isfinite(daily_volatility):
+    if (
+        not math.isfinite(excess_volatility)
+        or excess_volatility <= 0
+    ):
         raise ValueError(
             "Sharpe ratio cannot be calculated with zero or invalid volatility."
         )
 
     sharpe_ratio = (
         excess_returns.mean()
-        / daily_volatility
+        / excess_volatility
         * math.sqrt(periods_per_year)
     )
 
@@ -576,8 +580,7 @@ def calculate_beta_alpha(
         join="inner",
     ).sort_index()
 
-    returns = aligned.pct_change().dropna()
-
+    returns = aligned.pct_change(fill_method=None).dropna(how="any")
     if len(returns) < 2:
         raise ValueError(
             "At least three shared closing-price dates are required."
@@ -644,7 +647,7 @@ def _prepare_risk_metric_returns(
     if (prices <= 0).any():
         raise ValueError("Closing prices must be positive.")
 
-    returns = prices.pct_change().dropna()
+    returns = prices.pct_change(fill_method=None).dropna()
 
     if returns.empty:
         raise ValueError("Insufficient data to calculate returns.")
@@ -787,7 +790,7 @@ def calculate_portfolio_analytics(
             "At least three shared trading dates are required."
         )
 
-    asset_returns = prices.pct_change().dropna()
+    asset_returns = prices.pct_change(fill_method=None).dropna(how="any")
     weight_series = pd.Series(normalized_weights)
 
     # Constant target weights imply daily rebalancing.
@@ -1300,6 +1303,13 @@ def calculate_portfolio_benchmark_comparison(
         },
         "benchmark": {
             "ticker": benchmark_ticker,
+            "name": (
+                "NIFTY 50"
+                if benchmark_ticker == "^NSEI"
+                else "S&P 500"
+                if benchmark_ticker == "^GSPC"
+                else benchmark_ticker
+            ),
             "return": benchmark_return,
             "final_value": float(benchmark_final),
             "estimated_pnl": float(benchmark_final - initial_value),

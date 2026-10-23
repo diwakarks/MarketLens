@@ -1,6 +1,8 @@
 
 import json
 import logging
+import random
+import time
 import os
 from functools import lru_cache
 
@@ -57,12 +59,13 @@ def get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+
 def _generate_answer(
     *,
     instructions: str,
     prompt: str,
 ) -> str:
-    """Generate a response using the configured Gemini model."""
+    """Generate a Gemini response with retries for temporary failures."""
     model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 
     if not model:
@@ -72,27 +75,71 @@ def _generate_answer(
 
     logger.info("MarketLens AI using Gemini model: %s", model)
 
-    try:
-        response = get_gemini_client().models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=instructions,
-                temperature=0.2,
-            ),
-        )
-    except AIAnalystError:
-        raise
-    except Exception as exc:
-        logger.error(
-            "Gemini generation failed (%s): %s",
-            type(exc).__name__,
-            str(exc),
-        )
-        raise AIAnalystError(
-            "The Gemini request failed. Check the API key, model availability, "
-            "quota, billing, network connectivity, and backend logs."
-        ) from exc
+    response = None
+
+    for attempt in range(3):
+        try:
+            response = get_gemini_client().models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=instructions,
+                    temperature=0.2,
+                ),
+            )
+            break
+
+        except AIAnalystError:
+            raise
+
+        except Exception as exc:
+            status_code = (
+                getattr(exc, "code", None)
+                or getattr(exc, "status_code", None)
+            )
+
+            # Retry only temporary service and rate-limit failures.
+            retryable = status_code in {429, 500, 502, 503, 504}
+
+            if not retryable or attempt == 2:
+                logger.exception(
+                    "Gemini generation failed; model=%s status=%s",
+                    model,
+                    status_code,
+                )
+
+                if status_code == 503:
+                    message = (
+                        "Gemini is temporarily unavailable. "
+                        "Please try again shortly."
+                    )
+                elif status_code == 429:
+                    message = (
+                        "Gemini rate limit or quota reached. "
+                        "Check your API usage and try again later."
+                    )
+                elif status_code in {401, 403}:
+                    message = (
+                        "Gemini authentication or access failed. "
+                        "Check the API key and project permissions."
+                    )
+                else:
+                    message = (
+                        "Gemini could not complete the request. "
+                        "Check the backend logs for details."
+                    )
+
+                raise AIAnalystError(message) from exc
+
+            delay = (2 ** attempt) + random.uniform(0, 0.5)
+            logger.warning(
+                "Gemini temporary failure (%s); retrying in %.1fs "
+                "(attempt %s/3).",
+                status_code,
+                delay,
+                attempt + 1,
+            )
+            time.sleep(delay)
 
     answer = (getattr(response, "text", None) or "").strip()
 

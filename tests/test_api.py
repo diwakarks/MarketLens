@@ -111,6 +111,63 @@ def test_list_stocks(monkeypatch):
     ]
 
 
+def test_list_stocks_filters_by_market(monkeypatch):
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            pass
+
+        def fetchall(self):
+            return [
+                ("AAPL", "Apple Inc.", "NASDAQ", "USD"),
+                ("TCS.NS", "Tata Consultancy Services", "NSE", "INR"),
+                ("^NSEI", "NIFTY 50", "NSE", "INR"),
+            ]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        api,
+        "get_connection",
+        lambda: FakeConnection(),
+    )
+
+    response_in = client.get("/stocks?market=IN")
+    assert response_in.status_code == 200
+    assert response_in.json() == [
+        {
+            "ticker": "TCS.NS",
+            "name": "Tata Consultancy Services",
+            "exchange": "NSE",
+            "currency": "INR",
+        }
+    ]
+
+    response_us = client.get("/stocks?market=US")
+    assert response_us.status_code == 200
+    assert response_us.json() == [
+        {
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+        }
+    ]
+
+
 def test_metrics_endpoint_returns_summary(mock_market_data):
     response = client.get("/stocks/AAPL/metrics")
 
@@ -398,6 +455,68 @@ def test_refresh_status_endpoint_unknown_ticker_returns_404(monkeypatch):
     response = client.get("/stocks/UNKNOWN/refresh-status")
 
     assert response.status_code == 404
+
+
+def test_refresh_stock_endpoint_success(monkeypatch):
+    calls = []
+
+    def fake_download_and_import(ticker, name, exchange, currency):
+        calls.append((ticker, name, exchange, currency))
+        return 150
+
+    monkeypatch.setattr(
+        api,
+        "download_and_import_market_data",
+        fake_download_and_import,
+    )
+    monkeypatch.setattr(
+        api,
+        "get_data_freshness",
+        lambda ticker: {
+            "ticker": ticker,
+            "stored_rows": 150,
+            "latest_trade_date": "2026-10-23",
+            "last_successful_import": "2026-10-23T14:30:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "get_refresh_status",
+        lambda ticker: {
+            "ticker": ticker,
+            "provider": {"status": "success", "rows_downloaded": 150},
+            "database_import": {"status": "success", "rows_imported": 150},
+        },
+    )
+
+    response = client.post("/stocks/TCS.NS/refresh")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["ticker"] == "TCS.NS"
+    assert body["rows_imported"] == 150
+    assert body["latest_trade_date"] == "2026-10-23"
+    assert body["last_successful_import"] == "2026-10-23T14:30:00Z"
+    assert len(calls) == 1
+    assert calls[0][0] == "TCS.NS"
+    assert calls[0][3] == "INR"
+
+
+def test_refresh_stock_endpoint_failure(monkeypatch):
+    def fake_download_and_import(ticker, name, exchange, currency):
+        raise RuntimeError("Provider connection timeout")
+
+    monkeypatch.setattr(
+        api,
+        "download_and_import_market_data",
+        fake_download_and_import,
+    )
+
+    response = client.post("/stocks/TCS.NS/refresh")
+
+    assert response.status_code == 502
+    assert "Provider connection timeout" in response.json()["detail"]
 
 
 def test_drawdown_recovery_endpoint_compares_stock_and_benchmark(

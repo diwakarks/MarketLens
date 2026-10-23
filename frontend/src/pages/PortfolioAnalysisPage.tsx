@@ -10,7 +10,7 @@ import type {
   HistoricalPortfolioStressResponse,
 } from "../api";
 
-import { formatPrice, formatPercent } from "../utils/formatters";
+import { formatPercent } from "../utils/formatters";
 import {ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 
 type PortfolioAsset = {
@@ -126,6 +126,26 @@ export default function PortfolioAnalysisPage({
   portfolioBenchmarkError,
   runPortfolioBenchmarkComparison,
 }: PortfolioAnalysisPageProps) {
+
+
+  const isIndianPortfolio =
+    portfolioAssets.length === 0 ||
+    portfolioAssets.every((asset) =>
+      /\.(NS|BO)$/i.test(asset.ticker.trim()),
+    );
+
+  const portfolioCurrency = isIndianPortfolio ? "INR" : "USD";
+
+  const formatPortfolioMoney = (value: number) =>
+    new Intl.NumberFormat(
+      portfolioCurrency === "INR" ? "en-IN" : "en-US",
+      {
+        style: "currency",
+        currency: portfolioCurrency,
+        maximumFractionDigits: 2,
+      },
+    ).format(value);
+
   return (
     <>
       <section className="welcome-row portfolio-context-row">
@@ -168,7 +188,16 @@ export default function PortfolioAnalysisPage({
 
                 <div className="portfolio-settings">
                   <label className="portfolio-field">
-                    <span>INITIAL INVESTMENT ($)</span>
+                    <span>
+                      INITIAL INVESTMENT (
+                      {portfolioAssets.length === 0 ||
+                      portfolioAssets.every((asset) =>
+                        /\.(NS|BO)$/i.test(asset.ticker.trim())
+                      )
+                        ? "₹"
+                        : "$"}
+                      )
+                    </span>
                     <input
                       type="number"
                       min="0.01"
@@ -335,10 +364,10 @@ export default function PortfolioAnalysisPage({
                       <article className="portfolio-metric">
                         <span>Final value</span>
                         <strong>
-                          {formatPrice(portfolioResult.final_value)}
+                          {formatPortfolioMoney(portfolioResult.final_value)}
                         </strong>
                         <small>
-                          Initial: {formatPrice(portfolioResult.initial_value)}
+                          Initial: {formatPortfolioMoney(portfolioResult.initial_value)}
                         </small>
                       </article>
 
@@ -394,7 +423,7 @@ export default function PortfolioAnalysisPage({
                               : "portfolio-negative"
                           }
                         >
-                          {formatPrice(
+                          {formatPortfolioMoney(
                             portfolioResult.final_value -
                               portfolioResult.initial_value,
                           )}
@@ -435,11 +464,7 @@ export default function PortfolioAnalysisPage({
                             />
                             <YAxis
                               width={78}
-                              tickFormatter={(value: number) =>
-                                `$${value.toLocaleString("en-US", {
-                                  maximumFractionDigits: 0,
-                                })}`
-                              }
+                              tickFormatter={(value: number) => formatPortfolioMoney(value)}
                               tick={{ fill: "#93a1b6", fontSize: 11 }}
                               axisLine={false}
                               tickLine={false}
@@ -455,7 +480,7 @@ export default function PortfolioAnalysisPage({
                               labelFormatter={(label) => `Date: ${label}`}
                               formatter={(value) => [
                                 typeof value === "number"
-                                  ? formatPrice(value)
+                                  ? formatPortfolioMoney(value)
                                   : value,
                                 "Portfolio value",
                               ]}
@@ -722,7 +747,15 @@ export default function PortfolioAnalysisPage({
                 <div className="panel-heading">
                   <div>
                     <p className="eyebrow">RELATIVE PERFORMANCE</p>
-                    <h2>Portfolio vs. S&amp;P 500</h2>
+                    <h2>
+                      Portfolio vs.{" "}
+                      {portfolioAssets.length > 0 &&
+                      portfolioAssets.every((asset) =>
+                        /\.(NS|BO)$/i.test(asset.ticker.trim())
+                      )
+                        ? "NIFTY 50"
+                        : "S&P 500"}
+                    </h2>
                     <p>
                       Compare your portfolio with the market over the same
                       historical period and starting investment.
@@ -738,7 +771,7 @@ export default function PortfolioAnalysisPage({
                   </span>
                   <span>
                     Starting investment:{" "}
-                    {formatPrice(Number(portfolioInitialValue))}
+                    {formatPortfolioMoney(Number(portfolioInitialValue))}
                   </span>
                 </div>
 
@@ -781,7 +814,7 @@ export default function PortfolioAnalysisPage({
                         </strong>
                         <small>
                           Ending value:{" "}
-                          {formatPrice(
+                          {formatPortfolioMoney(
                             portfolioBenchmarkResult.portfolio.final_value,
                           )}
                         </small>
@@ -804,7 +837,7 @@ export default function PortfolioAnalysisPage({
                         </strong>
                         <small>
                           Ending value:{" "}
-                          {formatPrice(
+                          {formatPortfolioMoney(
                             portfolioBenchmarkResult.benchmark.final_value,
                           )}
                         </small>
@@ -843,7 +876,7 @@ export default function PortfolioAnalysisPage({
                           {portfolioBenchmarkResult.ending_value_difference > 0
                             ? "+"
                             : ""}
-                          {formatPrice(
+                          {formatPortfolioMoney(
                             portfolioBenchmarkResult.ending_value_difference,
                           )}
                         </strong>
@@ -938,7 +971,7 @@ export default function PortfolioAnalysisPage({
                         </strong>
                         <small>
                           P&amp;L:{" "}
-                          {formatPrice(historicalStressResult.estimated_pnl)}
+                          {formatPortfolioMoney(historicalStressResult.estimated_pnl)}
                         </small>
                       </article>
 
@@ -956,11 +989,11 @@ export default function PortfolioAnalysisPage({
                       <article className="historical-stress-metric">
                         <span>Ending portfolio value</span>
                         <strong>
-                          {formatPrice(historicalStressResult.final_value)}
+                          {formatPortfolioMoney(historicalStressResult.final_value)}
                         </strong>
                         <small>
                           Starting value:{" "}
-                          {formatPrice(historicalStressResult.initial_value)}
+                          {formatPortfolioMoney(historicalStressResult.initial_value)}
                         </small>
                       </article>
 
@@ -997,7 +1030,7 @@ export default function PortfolioAnalysisPage({
                                 <td>{asset.ticker}</td>
                                 <td>{formatPercent(asset.weight)}</td>
                                 <td>{formatPercent(asset.historical_return)}</td>
-                                <td>{formatPrice(asset.pnl_impact)}</td>
+                                <td>{formatPortfolioMoney(asset.pnl_impact)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -1069,7 +1102,7 @@ export default function PortfolioAnalysisPage({
                 <div className="scenario-actions">
                   <p>
                     Investment amount:{" "}
-                    {formatPrice(Number(portfolioInitialValue) || 0)}
+                    {formatPortfolioMoney(Number(portfolioInitialValue) || 0)}
                   </p>
                   <button
                     type="button"
@@ -1124,13 +1157,13 @@ export default function PortfolioAnalysisPage({
                               : "portfolio-negative"
                           }
                         >
-                          {formatPrice(scenarioResult.estimated_pnl)}
+                          {formatPortfolioMoney(scenarioResult.estimated_pnl)}
                         </strong>
                       </article>
 
                       <article className="scenario-metric">
                         <span>Post-shock value</span>
-                        <strong>{formatPrice(scenarioResult.final_value)}</strong>
+                        <strong>{formatPortfolioMoney(scenarioResult.final_value)}</strong>
                       </article>
                     </div>
 
@@ -1163,7 +1196,7 @@ export default function PortfolioAnalysisPage({
                                     : "portfolio-negative"
                                 }
                               >
-                                {formatPrice(impact.pnl_impact)}
+                                {formatPortfolioMoney(impact.pnl_impact)}
                               </strong>
                             </div>
                           ),
@@ -1237,7 +1270,7 @@ export default function PortfolioAnalysisPage({
                 <div className="scenario-actions">
                   <p>
                     Starting investment:{" "}
-                    {formatPrice(Number(portfolioInitialValue) || 0)}
+                    {formatPortfolioMoney(Number(portfolioInitialValue) || 0)}
                   </p>
 
                   <button
@@ -1300,14 +1333,14 @@ export default function PortfolioAnalysisPage({
                               : "portfolio-negative"
                           }
                         >
-                          {formatPrice(historicalResult.estimated_pnl)}
+                          {formatPortfolioMoney(historicalResult.estimated_pnl)}
                         </strong>
                       </article>
 
                       <article className="scenario-metric">
                         <span>Ending value</span>
                         <strong>
-                          {formatPrice(historicalResult.final_value)}
+                          {formatPortfolioMoney(historicalResult.final_value)}
                         </strong>
                       </article>
                     </div>
@@ -1365,7 +1398,7 @@ export default function PortfolioAnalysisPage({
                                       : "portfolio-negative"
                                   }
                                 >
-                                  {formatPrice(impact.pnl_impact)}
+                                  {formatPortfolioMoney(impact.pnl_impact)}
                                 </strong>
                                 <span>
                                   Portfolio return contribution:{" "}

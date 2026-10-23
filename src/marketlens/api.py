@@ -7,6 +7,7 @@ import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
+from yfinance import tickers
 
 from src.marketlens.analytics import (
     calculate_historical_portfolio_stress,
@@ -208,9 +209,19 @@ def health_check() -> dict:
     return {"status": "ok"}
 
 @app.get("/stocks/search", tags=["Stocks"])
-def search_stocks(q: str = "") -> list[dict]:
+def search_stocks(
+    q: str = "",
+    market: str = "IN",
+) -> list[dict]:
     """Search for instruments using Yahoo Finance."""
     query = q.strip()
+
+    market_mode = market.strip().upper()
+    if market_mode not in {"IN", "INDIA", "US", "USA"}:
+        raise HTTPException(
+            status_code=400,
+            detail="market must be IN or US.",
+        )
 
     if len(query) < 2:
         return []
@@ -243,14 +254,19 @@ def search_stocks(q: str = "") -> list[dict]:
         if instrument_type != "EQUITY":
             continue
 
-        if ticker.endswith(".NS"):
-            exchange = "NSE"
-            currency = "INR"
-        elif ticker.endswith(".BO"):
-            exchange = "BSE"
+        if market_mode in {"IN", "INDIA"}:
+            if ticker.endswith(".NS"):
+                exchange = "NSE"
+            elif ticker.endswith(".BO"):
+                exchange = "BSE"
+            else:
+                continue
             currency = "INR"
         else:
-            continue
+            if ticker.endswith((".NS", ".BO")):
+                continue
+            exchange = item.get("exchange") or item.get("exchDisp") or "US"
+            currency = "USD"
 
         # Exclude obvious fund/ETF results from the equity workflow.
         name_lower = name.lower()
@@ -266,15 +282,7 @@ def search_stocks(q: str = "") -> list[dict]:
             "already_added": False,
         })
 
-    results = [
-        item
-        for item in results
-        if item["instrument_type"] == "EQUITY"
-        and (
-            item["ticker"].endswith(".NS")
-            or item["ticker"].endswith(".BO")
-        )
-    ]
+
 
     if results:
         tickers = [item["ticker"] for item in results]
@@ -326,8 +334,8 @@ def import_stock(
     }
 
 @app.get("/stocks", tags=["Stocks"])
-def list_stocks() -> list[dict]:
-    """List instruments registered in PostgreSQL."""
+def list_stocks(market: str | None = None) -> list[dict]:
+    """List instruments registered in PostgreSQL. Optionally filter by market ('IN' or 'US')."""
     query = """
         SELECT ticker, name, exchange, currency
         FROM instruments
@@ -339,7 +347,7 @@ def list_stocks() -> list[dict]:
             cursor.execute(query)
             rows = cursor.fetchall()
 
-    return [
+    stocks = [
         {
             "ticker": row[0],
             "name": row[1],
@@ -347,7 +355,23 @@ def list_stocks() -> list[dict]:
             "currency": row[3],
         }
         for row in rows
+        if not str(row[0]).startswith("^")
     ]
+
+    if market:
+        market_mode = market.strip().upper()
+        if market_mode in ("IN", "INDIA"):
+            stocks = [
+                s for s in stocks
+                if s["ticker"].endswith((".NS", ".BO")) or s["currency"] == "INR"
+            ]
+        elif market_mode in ("US", "USA"):
+            stocks = [
+                s for s in stocks
+                if not s["ticker"].endswith((".NS", ".BO")) and s["currency"] == "USD"
+            ]
+
+    return stocks
 
 
 @app.get("/stocks/{ticker}/metrics", tags=["Analytics"])
@@ -418,7 +442,7 @@ def get_stock_metrics(
         "benchmark_name": benchmark["name"],
         "metrics": summary,
     }
-    
+
 
 
 @app.get("/stocks/{ticker}/history", tags=["Analytics"])
@@ -492,6 +516,72 @@ def stock_refresh_status(ticker: str):
             status_code=404,
             detail=str(error),
         ) from error
+
+
+@app.post("/stocks/{ticker}/refresh", tags=["Stocks"])
+def refresh_stock_data(ticker: str) -> dict:
+    """Download latest market prices and update PostgreSQL using the existing refresh pipeline."""
+    ticker = _normalize_stock_ticker(ticker)
+
+    # Lookup registered instrument details from database
+    query = """
+        SELECT name, exchange, currency
+        FROM instruments
+        WHERE ticker = %s;
+    """
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (ticker,))
+            row = cursor.fetchone()
+
+    if row:
+        name = row[0] or ticker
+        exchange = row[1] or ("NSE" if ticker.endswith(".NS") else "BSE" if ticker.endswith(".BO") else "NASDAQ")
+        currency = row[2] or ("INR" if ticker.endswith((".NS", ".BO", "^NSEI")) else "USD")
+    else:
+        if ticker.endswith(".NS"):
+            name, exchange, currency = ticker, "NSE", "INR"
+        elif ticker.endswith(".BO"):
+            name, exchange, currency = ticker, "BSE", "INR"
+        elif ticker == "^NSEI":
+            name, exchange, currency = "NIFTY 50 Index", "NSE", "INR"
+        elif ticker == "^GSPC":
+            name, exchange, currency = "S&P 500 Index", "INDEX", "USD"
+        elif ticker in {"AAPL", "MSFT"}:
+            name, exchange, currency = ticker, "NASDAQ", "USD"
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Instrument {ticker} is not registered in MarketLens. Search and import it first.",
+            )
+
+    try:
+        rows_imported = download_and_import_market_data(
+            ticker=ticker,
+            name=name,
+            exchange=exchange,
+            currency=currency,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to refresh market data for {ticker}: {exc}",
+        ) from exc
+
+    freshness = get_data_freshness(ticker)
+    refresh_status = get_refresh_status(ticker)
+
+    return {
+        "ticker": ticker,
+        "rows_imported": rows_imported,
+        "status": "success",
+        "latest_trade_date": freshness.get("latest_trade_date"),
+        "last_successful_import": freshness.get("last_successful_import"),
+        "freshness": freshness,
+        "refresh_status": refresh_status,
+    }
 
 
 @app.get("/stocks/{ticker}/analytics-series", tags=["Analytics"])
@@ -797,9 +887,13 @@ class PortfolioAnalyticsRequest(BaseModel):
 
 
 @app.post("/portfolio/analytics", tags=["Portfolio"])
+
+@app.post("/portfolio/analytics", tags=["Portfolio"])
 def get_portfolio_analytics(request: PortfolioAnalyticsRequest) -> dict:
     """Calculate historical analytics for a daily-rebalanced portfolio."""
     try:
+        get_portfolio_benchmark_details(request.tickers)
+
         market_data = {
             ticker: load_market_data_from_db(ticker)
             for ticker in request.tickers
@@ -822,6 +916,7 @@ def get_portfolio_analytics(request: PortfolioAnalyticsRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 class PortfolioScenarioRequest(BaseModel):
@@ -856,6 +951,11 @@ def portfolio_scenario(request: PortfolioScenarioRequest):
             status_code=422,
             detail="Ticker names must be unique.",
         )
+
+    try:
+        get_portfolio_benchmark_details(tickers)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     weights = dict(zip(tickers, request.weights))
     shocks = dict(zip(tickers, request.shocks))
@@ -905,6 +1005,11 @@ def historical_portfolio_scenario(
             detail="Ticker names must be unique.",
         )
 
+    try:
+        get_portfolio_benchmark_details(tickers)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     market_data = {}
 
     for ticker in tickers:
@@ -938,6 +1043,7 @@ class PortfolioBenchmarkComparisonRequest(BaseModel):
     start_date: date
     end_date: date
     initial_value: float = 10_000.0
+
 @app.post("/portfolio/benchmark-comparison")
 def portfolio_benchmark_comparison(
     request: PortfolioBenchmarkComparisonRequest,
@@ -984,13 +1090,17 @@ def portfolio_benchmark_comparison(
         benchmark_data = filtered_data.pop(benchmark["ticker"])
 
 
-        return calculate_portfolio_benchmark_comparison(
+        result = calculate_portfolio_benchmark_comparison(
             market_data=filtered_data,
             weights=weights,
             benchmark_data=benchmark_data,
             initial_value=request.initial_value,
             benchmark_ticker=benchmark["ticker"],
         )
+
+        result["benchmark_name"] = benchmark["name"]
+
+        return result
 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1014,6 +1124,11 @@ def historical_portfolio_stress(
         request.tickers,
         request.weights,
     )
+
+    try:
+        get_portfolio_benchmark_details(tickers)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if request.start_date > request.end_date:
         raise HTTPException(
@@ -1056,7 +1171,7 @@ def historical_portfolio_stress(
 
 class AIAnalystRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
-    ticker: str = Field(default="AAPL", min_length=1, max_length=15)
+    ticker: str = Field(default="TCS.NS", min_length=1, max_length=15)
     start_date: date | None = None
     end_date: date | None = None
 
@@ -1091,13 +1206,24 @@ def ask_ai_analyst(request: AIAnalystRequest) -> dict:
                 detail=f"No market data is available for {ticker}.",
             )
 
+
         market_data = filter_market_data_by_date(
             market_data,
             request.start_date,
             request.end_date,
         )
 
+        if market_data is None or market_data.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No market data is available for {ticker} "
+                    "within the selected date range."
+                ),
+            )
+
         _, metrics = calculate_metrics(market_data)
+
 
         answer = answer_market_question(
             question=question,
@@ -1177,6 +1303,17 @@ def ask_portfolio_analyst(
             )
             for ticker, frame in market_data.items()
         }
+
+        for ticker, frame in filtered_data.items():
+            if frame is None or frame.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No market data is available for {ticker} "
+                        "within the selected date range."
+                    ),
+                )
+
 
         weights = dict(zip(request.tickers, request.weights))
 
