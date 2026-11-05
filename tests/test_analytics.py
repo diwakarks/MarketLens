@@ -16,6 +16,11 @@ from src.marketlens.analytics import (
     calculate_drawdown_recovery,
     generate_market_insights,
     calculate_portfolio_benchmark_comparison,
+    calculate_actual_portfolio_series,
+    calculate_actual_portfolio_xirr,
+    calculate_time_weighted_return,
+    calculate_portfolio_drawdown,
+    calculate_portfolio_risk_metrics,
 )
 
 
@@ -645,3 +650,450 @@ def test_historical_portfolio_stress_handles_timezone_aware_prices():
     assert result["historical_return"] == pytest.approx(-0.05)
     assert result["maximum_drawdown"] == pytest.approx(-0.20)
     assert result["maximum_drawdown_date"] == "2025-01-06"
+
+
+def test_actual_portfolio_valuation_is_complete_with_fresh_prices():
+    dates = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-05"])
+
+    market_data = {
+        "AAPL": pd.DataFrame(
+            {"Close": [100.0, 105.0, 110.0]},
+            index=dates,
+    )
+    }
+
+    transactions = [
+        {
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "transaction_date": "2026-01-01",
+            "id": 1,
+        }
+    ]
+
+    result = calculate_actual_portfolio_series(
+        transactions,
+        market_data,
+    )
+
+    final_record = result["series"][-1]
+
+    assert final_record["portfolio_value"] == pytest.approx(1100.0)
+    assert final_record["partial_portfolio_value"] == pytest.approx(1100.0)
+    assert final_record["is_complete"] is True
+    assert final_record["unpriced_tickers"] == []
+    assert final_record["stale_tickers"] == []
+
+
+def test_actual_portfolio_valuation_marks_missing_prices_incomplete():
+    dates = pd.to_datetime(["2026-01-01", "2026-01-02"])
+
+    market_data = {
+        "AAPL": pd.DataFrame(
+            {"Close": [100.0, 110.0]},
+            index=dates,
+    )
+    }
+
+    transactions = [
+        {
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "transaction_date": "2026-01-01",
+            "id": 1,
+        },
+        {
+            "ticker": "MSFT",
+            "transaction_type": "BUY",
+            "quantity": 5,
+            "transaction_date": "2026-01-01",
+            "id": 2,
+        },
+    ]
+
+    result = calculate_actual_portfolio_series(
+        transactions,
+        market_data,
+    )
+
+    final_record = result["series"][-1]
+
+    assert final_record["portfolio_value"] is None
+    assert final_record["partial_portfolio_value"] == pytest.approx(1100.0)
+    assert final_record["is_complete"] is False
+    assert final_record["unpriced_tickers"] == ["MSFT"]
+
+
+def test_actual_portfolio_valuation_marks_stale_prices_incomplete():
+    dates = pd.to_datetime(["2026-01-01", "2026-01-10"])
+
+    market_data = {
+        "AAPL": pd.DataFrame(
+            {"Close": [100.0]},
+            index=pd.to_datetime(["2026-01-01"]),
+    ),
+    "MSFT": pd.DataFrame(
+        {"Close": [200.0, 210.0]},
+        index=dates,
+    ),
+    }
+
+    transactions = [
+        {
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "transaction_date": "2026-01-01",
+            "id": 1,
+        },
+    ]
+
+    result = calculate_actual_portfolio_series(
+        transactions,
+        market_data,
+    )
+
+    final_record = result["series"][-1]
+
+    assert final_record["portfolio_value"] is None
+    assert final_record["partial_portfolio_value"] == 0.0
+    assert final_record["is_complete"] is False
+    assert final_record["stale_tickers"] == ["AAPL"]
+
+
+def test_actual_portfolio_valuation_does_not_use_future_prices():
+    dates = pd.to_datetime(["2026-01-05", "2026-01-10"])
+
+    market_data = {
+        "AAPL": pd.DataFrame(
+            {"Close": [100.0, 120.0]},
+            index=dates,
+    ),
+    }
+
+    transactions = [
+        {
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "transaction_date": "2026-01-05",
+            "id": 1,
+        },
+    ]
+
+    result = calculate_actual_portfolio_series(
+        transactions,
+        market_data,
+        start_date="2026-01-05",
+        end_date="2026-01-05",
+    )
+
+    record = result["series"][0]
+
+    assert record["portfolio_value"] == pytest.approx(1000.0)
+    assert record["positions"]["AAPL"]["price"] == pytest.approx(100.0)
+    assert record["positions"]["AAPL"]["price_date"] == "2026-01-05"
+
+
+def test_actual_portfolio_xirr_positive_return():
+    transactions = [
+        {
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 100,
+            "fees": 0,
+            "transaction_date": "2025-01-01",
+        }
+    ]
+
+    result = calculate_actual_portfolio_xirr(
+        transactions=transactions,
+        terminal_value=1200,
+        terminal_date="2026-01-01",
+    )
+
+    assert result["xirr"] > 0
+    assert result["method"] == "transaction_based_xirr"
+
+
+def test_actual_portfolio_xirr_negative_return():
+    transactions = [
+        {
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 100,
+            "fees": 0,
+            "transaction_date": "2025-01-01",
+        }
+    ]
+
+    result = calculate_actual_portfolio_xirr(
+        transactions=transactions,
+        terminal_value=800,
+        terminal_date="2026-01-01",
+    )
+
+    assert result["xirr"] < 0
+
+
+def test_actual_portfolio_xirr_accounts_for_sell_proceeds():
+    transactions = [
+        {
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 100,
+            "fees": 0,
+            "transaction_date": "2025-01-01",
+        },
+        {
+            "transaction_type": "SELL",
+            "quantity": 5,
+            "price_per_share": 120,
+            "fees": 0,
+            "transaction_date": "2025-07-01",
+        },
+    ]
+
+    result = calculate_actual_portfolio_xirr(
+        transactions=transactions,
+        terminal_value=600,
+        terminal_date="2026-01-01",
+    )
+
+    assert result["xirr"] > 0
+    assert result["cash_flow_count"] == 3
+
+
+def test_actual_portfolio_xirr_rejects_only_negative_cash_flows():
+    transactions = [
+        {
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 100,
+            "fees": 0,
+            "transaction_date": "2025-01-01",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="positive cash flow"):
+        calculate_actual_portfolio_xirr(
+            transactions=transactions,
+            terminal_value=0,
+            terminal_date="2026-01-01",
+        )
+
+
+def test_actual_portfolio_xirr_rejects_terminal_date_before_transaction():
+    transactions = [
+        {
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 100,
+            "fees": 0,
+            "transaction_date": "2025-06-01",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Terminal date"):
+        calculate_actual_portfolio_xirr(
+            transactions=transactions,
+            terminal_value=1200,
+            terminal_date="2025-01-01",
+        )
+
+
+def test_twr_without_external_cash_flows():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1100},
+        {"date": "2026-01-03", "portfolio_value": 1210},
+    ]
+
+    result = calculate_time_weighted_return(valuations)
+
+    assert result["twr"] == pytest.approx(0.21)
+    assert len(result["daily_returns"]) == 2
+
+
+def test_twr_adjusts_for_external_contribution():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1500},
+        {"date": "2026-01-03", "portfolio_value": 1650},
+    ]
+
+    cash_flows = [
+        {"date": "2026-01-02", "amount": 400},
+    ]
+
+    result = calculate_time_weighted_return(
+        valuations,
+        external_cash_flows=cash_flows,
+    )
+
+    # Day 2 return: (1500 - 400) / 1000 - 1 = 10%
+    # Day 3 return: 1650 / 1500 - 1 = 10%
+    # Cumulative TWR: 1.1 * 1.1 - 1 = 21%
+    assert result["twr"] == pytest.approx(0.21)
+
+
+def test_twr_adjusts_for_external_withdrawal():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 600},
+    ]
+
+    cash_flows = [
+        {"date": "2026-01-02", "amount": -500},
+    ]
+
+    result = calculate_time_weighted_return(
+        valuations,
+        external_cash_flows=cash_flows,
+    )
+
+    # (600 - (-500)) / 1000 - 1 = 10%
+    assert result["twr"] == pytest.approx(0.10)
+
+
+def test_twr_rejects_incomplete_valuation():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": None},
+    ]
+
+    with pytest.raises(ValueError, match="incomplete"):
+        calculate_time_weighted_return(valuations)
+
+
+def test_twr_rejects_cash_flow_without_matching_valuation():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1100},
+    ]
+
+    cash_flows = [
+        {"date": "2026-01-03", "amount": 200},
+    ]
+
+    with pytest.raises(ValueError, match="matching portfolio valuation"):
+        calculate_time_weighted_return(
+            valuations,
+            external_cash_flows=cash_flows,
+        )
+
+def test_portfolio_drawdown_calculates_maximum_decline():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1200},
+        {"date": "2026-01-03", "portfolio_value": 900},
+        {"date": "2026-01-04", "portfolio_value": 1100},
+    ]
+
+    result = calculate_portfolio_drawdown(valuations)
+
+    assert result["maximum_drawdown"] == pytest.approx(-0.25)
+    assert result["maximum_drawdown_percent"] == pytest.approx(-25.0)
+    assert result["peak_date"] == "2026-01-02"
+    assert result["trough_date"] == "2026-01-03"
+
+
+def test_portfolio_drawdown_duration_tracks_recovery():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1200},
+        {"date": "2026-01-03", "portfolio_value": 1000},
+        {"date": "2026-01-04", "portfolio_value": 1100},
+        {"date": "2026-01-05", "portfolio_value": 1250},
+    ]
+
+    result = calculate_portfolio_drawdown(valuations)
+
+    assert result["maximum_drawdown_duration_days"] == 3
+    assert result["drawdown_recovery_date"] == "2026-01-05"
+    assert result["drawdown_ongoing"] is False
+
+
+def test_portfolio_drawdown_detects_ongoing_drawdown():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1200},
+        {"date": "2026-01-03", "portfolio_value": 900},
+        {"date": "2026-01-04", "portfolio_value": 950},
+    ]
+
+    result = calculate_portfolio_drawdown(valuations)
+
+    assert result["drawdown_ongoing"] is True
+    assert result["current_drawdown_duration_days"] == 2
+    assert result["drawdown_recovery_date"] is None
+
+
+def test_portfolio_drawdown_rejects_incomplete_valuation():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": None},
+    ]
+
+    with pytest.raises(ValueError, match="incomplete"):
+        calculate_portfolio_drawdown(valuations)
+
+def test_portfolio_risk_metrics_calculates_volatility_and_sharpe():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1100},
+        {"date": "2026-01-03", "portfolio_value": 1050},
+        {"date": "2026-01-04", "portfolio_value": 1150},
+    ]
+
+    result = calculate_portfolio_risk_metrics(
+        valuations,
+        risk_free_rate=0.0,
+    )
+
+    assert result["annualized_volatility"] > 0
+    assert result["sharpe_ratio"] is not None
+    assert result["observations"] == 3
+
+
+def test_portfolio_risk_metrics_rejects_incomplete_valuation():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": None},
+    ]
+
+    with pytest.raises(ValueError, match="incomplete"):
+        calculate_portfolio_risk_metrics(valuations)
+
+
+def test_portfolio_risk_metrics_handles_zero_volatility():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1000},
+        {"date": "2026-01-03", "portfolio_value": 1000},
+    ]
+
+    result = calculate_portfolio_risk_metrics(
+        valuations,
+        risk_free_rate=0.0,
+    )
+
+    assert result["annualized_volatility"] == pytest.approx(0.0)
+    assert result["sharpe_ratio"] is None
+    assert "zero" in result["sharpe_unavailable_reason"].lower()
+
+
+def test_portfolio_risk_metrics_rejects_invalid_risk_free_rate():
+    valuations = [
+        {"date": "2026-01-01", "portfolio_value": 1000},
+        {"date": "2026-01-02", "portfolio_value": 1100},
+        {"date": "2026-01-03", "portfolio_value": 1050},
+    ]
+
+    with pytest.raises(ValueError, match="Risk-free rate"):
+        calculate_portfolio_risk_metrics(
+            valuations,
+            risk_free_rate=float("nan"),
+        )

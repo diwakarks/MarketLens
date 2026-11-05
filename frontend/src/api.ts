@@ -431,6 +431,32 @@ export interface PortfolioAnalyticsResponse {
   annualized_covariance_volatility: number;
 }
 
+export interface ActualPortfolioPosition {
+  quantity: number;
+  price: number;
+  market_value: number;
+}
+
+export interface ActualPortfolioSeriesPoint {
+  date: string;
+  portfolio_value: number;
+  positions: Record<string, ActualPortfolioPosition>;
+  unpriced_tickers: string[];
+}
+
+export interface ActualPortfolioAnalyticsResponse {
+  start_date: string;
+  end_date: string;
+  transaction_start_date: string;
+  series: ActualPortfolioSeriesPoint[];
+}
+
+export interface ActualPortfolioAnalyticsRequest {
+  risk_free_rate?: number;
+  start_date?: string;
+  end_date?: string;
+}
+
 export interface PortfolioAnalyticsRequest {
   tickers: string[];
   weights: number[];
@@ -448,6 +474,17 @@ export function getPortfolioAnalytics(
     payload,
   );
 }
+
+
+export function getActualPortfolioAnalytics(
+  payload: ActualPortfolioAnalyticsRequest = {},
+): Promise<ActualPortfolioAnalyticsResponse> {
+  return postRequest<ActualPortfolioAnalyticsResponse>(
+    "/portfolio/actual-analytics",
+    payload,
+  );
+}
+
 
 
 export interface ScenarioAssetImpact {
@@ -606,5 +643,117 @@ export function getPortfolioBenchmarkComparison(
   return postRequest<PortfolioBenchmarkComparisonResponse>(
     "/portfolio/benchmark-comparison",
     payload,
+  );
+}
+
+
+export type PortfolioNumericValue = number | string;
+
+export interface PortfolioValuationPosition {
+  ticker: string;
+  quantity: PortfolioNumericValue;
+  average_cost: PortfolioNumericValue;
+  cost_basis: PortfolioNumericValue;
+  realized_pnl: PortfolioNumericValue;
+  latest_price: PortfolioNumericValue | null;
+  market_value: PortfolioNumericValue | null;
+  unrealized_pnl: PortfolioNumericValue | null;
+  unrealized_pnl_pct: PortfolioNumericValue | null;
+}
+
+export interface PortfolioValuationResponse {
+  positions: PortfolioValuationPosition[];
+  count: number;
+  total_market_value: PortfolioNumericValue;
+  total_cost_basis: PortfolioNumericValue;
+  total_realized_pnl: PortfolioNumericValue;
+  total_unrealized_pnl: PortfolioNumericValue | null;
+  total_pnl: PortfolioNumericValue | null;
+  unpriced_tickers: string[];
+}
+
+export function getPortfolioValuation(): Promise<PortfolioValuationResponse> {
+  return request<PortfolioValuationResponse>("/portfolio/valuation");
+}
+
+
+export interface PortfolioTransactionRequest {
+  ticker: string;
+  transaction_type: "BUY" | "SELL";
+  quantity: number;
+  price_per_share: number;
+  transaction_date: string;
+  fees: number;
+}
+
+export interface PortfolioTransactionResponse {
+  status: string;
+  transaction: {
+    [key: string]: string | number | null;
+  };
+}
+
+export function createPortfolioTransaction(
+  transaction: PortfolioTransactionRequest,
+): Promise<PortfolioTransactionResponse> {
+  return request<PortfolioTransactionResponse>(
+    "/portfolio/transactions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(transaction),
+    },
+  );
+}
+
+
+export interface PortfolioTransaction {
+  id: number;
+  ticker: string;
+  transaction_type: "BUY" | "SELL";
+  quantity: string;
+  price_per_share: string;
+  transaction_date: string;
+  fees: string;
+}
+
+export function getPortfolioTransactions(): Promise<PortfolioTransaction[]> {
+  return request<PortfolioTransaction[]>("/portfolio/transactions");
+}
+
+export interface PortfolioTransactionUpdateRequest {
+  transaction_type: "BUY" | "SELL";
+  quantity: number;
+  price_per_share: number;
+  transaction_date: string;
+  fees: number;
+}
+
+export async function updatePortfolioTransaction(
+  transactionId: number,
+  transaction: PortfolioTransactionUpdateRequest,
+): Promise<PortfolioTransaction> {
+  return request<PortfolioTransaction>(
+    `/portfolio/transactions/${transactionId}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(transaction),
+    },
+  );
+}
+
+export async function deletePortfolioTransaction(
+  transactionId: number,
+): Promise<{ id: number; status: string }> {
+  return request<{ id: number; status: string }>(
+    `/portfolio/transactions/${transactionId}`,
+    {
+      method: "DELETE",
+    },
   );
 }

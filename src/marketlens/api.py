@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 from yfinance import tickers
 
 from src.marketlens.analytics import (
+    calculate_actual_portfolio_series,
     calculate_historical_portfolio_stress,
     calculate_metrics,
     calculate_portfolio_analytics,
@@ -22,6 +23,7 @@ from src.marketlens.analytics import (
     calculate_drawdown_recovery,
     generate_market_insights,
     calculate_portfolio_scenario,
+    calculate_actual_portfolio_xirr,
 )
 from src.marketlens.database import (
     get_connection,
@@ -31,11 +33,25 @@ from src.marketlens.database import (
     download_and_import_market_data,
 )
 
+from src.marketlens.portfolio_ledger import (
+    record_transaction,
+    get_holdings,
+    get_portfolio_valuation,
+)
+
 from src.marketlens.ai_analyst import (
     AIAnalystError,
     answer_market_question,
     answer_portfolio_question,
 )
+from src.marketlens.portfolio_ledger import (
+    record_transaction,
+    get_holdings,
+    get_portfolio_valuation,
+    update_transaction,
+    delete_transaction,
+)
+from .portfolio_ledger import get_transaction_history
 
 app = FastAPI(
     title="MarketLens API",
@@ -886,7 +902,23 @@ class PortfolioAnalyticsRequest(BaseModel):
         return self
 
 
-@app.post("/portfolio/analytics", tags=["Portfolio"])
+class ActualPortfolioAnalyticsRequest(BaseModel):
+    risk_free_rate: float = Field(default=0.065, ge=0)
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        if (
+            self.start_date
+            and self.end_date
+            and self.start_date > self.end_date
+        ):
+            raise ValueError(
+                "start_date must be on or before end_date."
+            )
+        return self
+
 
 @app.post("/portfolio/analytics", tags=["Portfolio"])
 def get_portfolio_analytics(request: PortfolioAnalyticsRequest) -> dict:
@@ -917,6 +949,101 @@ def get_portfolio_analytics(request: PortfolioAnalyticsRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+@app.post("/portfolio/actual-analytics", tags=["Portfolio"])
+def get_actual_portfolio_analytics(
+    request: ActualPortfolioAnalyticsRequest,
+) -> dict:
+    """Analyze actual holdings reconstructed from the transaction ledger."""
+    transactions = get_transaction_history()
+
+    if not transactions:
+        raise HTTPException(
+            status_code=400,
+            detail="Record at least one portfolio transaction first.",
+        )
+
+    tickers = sorted({
+        transaction["ticker"].strip().upper()
+        for transaction in transactions
+    })
+
+    try:
+        market_data = {
+            ticker: load_market_data_from_db(ticker)
+            for ticker in tickers
+        }
+        result = calculate_actual_portfolio_series(
+            transactions=transactions,
+            market_data=market_data,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+
+        # Calculate XIRR only when the terminal valuation is complete.
+        series = result.get("series", [])
+
+        if series:
+            final_record = series[-1]
+
+            if final_record.get("is_complete"):
+                terminal_value = final_record.get("portfolio_value")
+
+                if terminal_value is not None:
+                    try:
+                        xirr_result = calculate_actual_portfolio_xirr(
+                            transactions=transactions,
+                            terminal_value=terminal_value,
+                            terminal_date=final_record["date"],
+                        )
+                        result["performance"] = {
+                            "xirr": xirr_result,
+                        }
+                    except ValueError as exc:
+                        result["performance"] = {
+                            "xirr": None,
+                            "xirr_unavailable_reason": str(exc),
+                        }
+            else:
+                result["performance"] = {
+                    "xirr": None,
+                    "xirr_unavailable_reason": (
+                        "XIRR unavailable because the terminal "
+                        "portfolio valuation is incomplete."
+                    ),
+                }
+        else:
+            result["performance"] = {
+                "xirr": None,
+                "xirr_unavailable_reason": (
+                    "No valuation series is available."
+                ),
+            }
+
+        return result
+
+
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+
+class ActualPortfolioAnalyticsRequest(BaseModel):
+    risk_free_rate: float = Field(default=0.065, ge=0)
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        if (
+            self.start_date
+            and self.end_date
+            and self.start_date > self.end_date
+        ):
+            raise ValueError("start_date must be on or before end_date.")
+        return self
 
 
 class PortfolioScenarioRequest(BaseModel):
@@ -1393,3 +1520,132 @@ def ask_portfolio_analyst(
             status_code=500,
             detail="The portfolio AI Analyst could not process this request.",
         ) from exc
+
+
+class PortfolioTransactionRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    transaction_type: str
+    quantity: float = Field(gt=0, allow_inf_nan=False)
+    price_per_share: float = Field(gt=0, allow_inf_nan=False)
+    transaction_date: date
+    fees: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+class PortfolioTransactionUpdateRequest(BaseModel):
+    transaction_type: str
+    quantity: float = Field(gt=0, allow_inf_nan=False)
+    price_per_share: float = Field(gt=0, allow_inf_nan=False)
+    transaction_date: date
+    fees: float = Field(default=0, ge=0, allow_inf_nan=False)
+
+
+@app.put("/portfolio/transactions/{transaction_id}", tags=["Portfolio"])
+def edit_portfolio_transaction(
+    transaction_id: int,
+    request: PortfolioTransactionUpdateRequest,
+) -> dict:
+    try:
+        result = update_transaction(
+            transaction_id=transaction_id,
+            transaction_type=request.transaction_type,
+            quantity=request.quantity,
+            price_per_share=request.price_per_share,
+            transaction_date=request.transaction_date,
+            fees=request.fees,
+        )
+        return {"status": "success", "transaction": {
+            key: value.isoformat() if isinstance(value, date)
+            else str(value) if hasattr(value, "as_tuple")
+            else value
+            for key, value in result.items()
+        }}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/portfolio/transactions/{transaction_id}", tags=["Portfolio"])
+def remove_portfolio_transaction(transaction_id: int) -> dict:
+    try:
+        return delete_transaction(transaction_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/portfolio/transactions", tags=["Portfolio"])
+def create_portfolio_transaction(
+    request: PortfolioTransactionRequest,
+) -> dict:
+    """Record a purchase or sale in the portfolio ledger."""
+    try:
+        result = record_transaction(
+            ticker=request.ticker,
+            transaction_type=request.transaction_type,
+            quantity=request.quantity,
+            price_per_share=request.price_per_share,
+            transaction_date=request.transaction_date,
+            fees=request.fees,
+        )
+
+        return {
+            "status": "success",
+            "transaction": {
+                key: value.isoformat() if isinstance(value, date)
+                else str(value) if hasattr(value, "as_tuple")
+                else value
+                for key, value in result.items()
+            },
+        }
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/portfolio/holdings", tags=["Portfolio"])
+def portfolio_holdings() -> dict:
+    """Return current holdings and average-cost realized P/L."""
+    try:
+        holdings = get_holdings()
+
+        return {
+            "count": len(holdings),
+            "holdings": [
+                {
+                    key: str(value) if hasattr(value, "as_tuple") else value
+                    for key, value in holding.items()
+                }
+                for holding in holdings
+            ],
+        }
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/portfolio/valuation", tags=["Portfolio"])
+def portfolio_valuation() -> dict:
+    """Return current portfolio valuation and profit/loss."""
+    try:
+        result = get_portfolio_valuation()
+
+        def serialize(value):
+            if isinstance(value, dict):
+                return {
+                    key: serialize(item)
+                    for key, item in value.items()
+                }
+            if isinstance(value, list):
+                return [serialize(item) for item in value]
+            if hasattr(value, "as_tuple"):
+                return str(value)
+            return value
+
+        return serialize(result)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/portfolio/transactions")
+def portfolio_transactions():
+    return get_transaction_history()

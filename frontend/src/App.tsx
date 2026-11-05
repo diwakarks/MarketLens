@@ -16,6 +16,9 @@ import {
   getHistoricalPortfolioScenario,
   getPortfolioBenchmarkComparison,
   getHistoricalPortfolioStress,
+  getPortfolioValuation,
+  getPortfolioTransactions,
+  getActualPortfolioAnalytics,
 } from "./api";
 import type {
   Stock,
@@ -33,6 +36,7 @@ import type {
   HistoricalPortfolioScenarioResponse,
   PortfolioBenchmarkComparisonResponse,
   HistoricalPortfolioStressResponse,
+  ActualPortfolioAnalyticsResponse,
 } from "./api";
 import OverviewPage from "./pages/OverviewPage";
 import DataStatusPage from "./pages/DataStatusPage";
@@ -40,7 +44,7 @@ import StockAnalysisPage from "./pages/StockAnalysisPage";
 import PortfolioAnalysisPage from "./pages/PortfolioAnalysisPage";
 import AIAnalysisPage from "./pages/AIAnalysisPage";
 
-type Period = "1M" | "3M" | "6M" | "1Y" | "ALL";
+type Period = "1M" | "3M" | "6M" | "1Y" | "2Y" | "3Y" | "5Y" | "10Y" | "ALL";
 
 function getDateRange(
   period: Period,
@@ -66,6 +70,18 @@ function getDateRange(
     case "1Y":
       start.setUTCFullYear(start.getUTCFullYear() - 1);
       break;
+    case "2Y":
+      start.setUTCFullYear(start.getUTCFullYear() - 2);
+      break;
+    case "3Y":
+      start.setUTCFullYear(start.getUTCFullYear() - 3);
+      break;
+    case "5Y":
+      start.setUTCFullYear(start.getUTCFullYear() - 5);
+      break;
+    case "10Y":
+      start.setUTCFullYear(start.getUTCFullYear() - 10);
+      break;
   }
 
   return {
@@ -89,12 +105,13 @@ function App() {
   }, [activePage]);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [portfolioAssets, setPortfolioAssets] = useState<
-  { ticker: string; weight: string }[]
->([]);
-
-const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
-  {},
-);
+    { ticker: string; weight: string }[]
+  >([]);
+  const [portfolioSyncError, setPortfolioSyncError] = useState("");
+  const [portfolioStartDate, setPortfolioStartDate] = useState("");
+  const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
+    {},
+  );
   const [selectedStock, setSelectedStock] = useState("TCS.NS");
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("3M");
   const [dataVersion, setDataVersion] = useState(0);
@@ -123,36 +140,6 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
         }
 
         return next;
-      });
-
-      setPortfolioAssets((current) => {
-        if (current.length > 0) {
-          return current.filter((asset) =>
-            result.some((stock) => stock.ticker === asset.ticker),
-          );
-        }
-
-        const preferred = [
-          "TCS.NS",
-          "GROWW.NS",
-          "APOLLO.NS",
-          "ETERNAL.NS",
-          "AAPL",
-          "MSFT",
-        ].filter((ticker) =>
-          result.some((stock) => stock.ticker === ticker),
-        );
-
-        const tickers = (
-          preferred.length >= 2
-            ? preferred
-            : result.slice(0, 2).map((stock) => stock.ticker)
-        ).slice(0, 2);
-
-        return tickers.map((ticker, index) => ({
-          ticker,
-          weight: index === 0 ? (tickers.length === 1 ? "100" : "60") : "40",
-        }));
       });
 
       setSelectedStock((current) =>
@@ -217,6 +204,12 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
   const [portfolioRiskFreeRate, setPortfolioRiskFreeRate] = useState("6.5");
   const [portfolioResult, setPortfolioResult] =
     useState<PortfolioAnalyticsResponse | null>(null);
+  const [actualPortfolioResult, setActualPortfolioResult] =
+    useState<ActualPortfolioAnalyticsResponse | null>(null);
+
+  const [actualPortfolioLoading, setActualPortfolioLoading] = useState(false);
+
+  const [actualPortfolioError, setActualPortfolioError] = useState("");
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState("");
 
@@ -606,7 +599,65 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     };
   }, [selectedStock, dataVersion]);
 
+  const refreshPortfolioState = useCallback(async () => {
+    try {
+      const [valuation, transactions] = await Promise.all([
+        getPortfolioValuation(),
+        getPortfolioTransactions(),
+      ]);
 
+      const transactionDates = transactions
+        .map((transaction) => transaction.transaction_date.slice(0, 10))
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        .sort();
+
+      setPortfolioStartDate(transactionDates[0] ?? "");
+      setPortfolioSyncError("");
+
+      const positions = valuation.positions.filter(
+        (position) => Number(position.quantity) > 0,
+      );
+
+      const positionValues = positions.map((position) => {
+        const marketValue = Number(position.market_value);
+        const costBasis = Number(position.cost_basis);
+
+        return {
+          ticker: position.ticker,
+          value:
+            Number.isFinite(marketValue) && marketValue > 0
+              ? marketValue
+              : Number.isFinite(costBasis) && costBasis > 0
+                ? costBasis
+                : 0,
+        };
+      });
+
+      const totalValue = positionValues.reduce(
+        (sum, position) => sum + position.value,
+        0,
+      );
+
+      setPortfolioAssets(
+        positionValues.map((position) => ({
+          ticker: position.ticker,
+          weight:
+            totalValue > 0
+              ? ((position.value / totalValue) * 100).toFixed(2)
+              : (100 / positionValues.length).toFixed(2),
+        })),
+      );
+    } catch (error) {
+      setPortfolioSyncError(
+        error instanceof Error
+          ? error.message
+          : "Unable to synchronize the portfolio.",
+      );
+    }
+  }, []);
+  useEffect(() => {
+    void refreshPortfolioState();
+  }, [refreshPortfolioState]);
   const portfolioWeightTotal = portfolioAssets.reduce(
     (sum, asset) => sum + (Number(asset.weight) || 0),
     0,
@@ -622,44 +673,13 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     ) &&
     Math.abs(portfolioWeightTotal - 100) < 0.000001;
 
-  function addPortfolioAsset(ticker: string) {
-    if (!ticker || portfolioAssets.some((asset) => asset.ticker === ticker)) {
-      return;
-    }
-
-    setPortfolioAssets((current) => [...current, { ticker, weight: "0" }]);
-    setPortfolioResult(null);
-  }
-
-  function updatePortfolioWeight(ticker: string, weight: string) {
-    setPortfolioAssets((current) =>
-      current.map((asset) =>
-        asset.ticker === ticker ? { ...asset, weight } : asset,
-      ),
-    );
-    setPortfolioResult(null);
-  }
-
-  function removePortfolioAsset(ticker: string) {
-    setPortfolioAssets((current) =>
-      current.filter((asset) => asset.ticker !== ticker),
-    );
-    setPortfolioResult(null);
-  }
-
   async function runPortfolioAnalysis() {
     if (!portfolioWeightsValid) {
       setPortfolioError("Set valid asset weights that total exactly 100%.");
       return;
     }
 
-    const initialValue = Number(portfolioInitialValue);
     const riskFreeRatePercent = Number(portfolioRiskFreeRate);
-
-    if (!Number.isFinite(initialValue) || initialValue <= 0) {
-      setPortfolioError("Initial portfolio value must be greater than zero.");
-      return;
-    }
 
     if (!Number.isFinite(riskFreeRatePercent) || riskFreeRatePercent < 0) {
       setPortfolioError("Risk-free rate must be zero or greater.");
@@ -669,6 +689,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
     setPortfolioLoading(true);
     setPortfolioError("");
     setPortfolioResult(null);
+    const initialValue = Number(portfolioInitialValue);
 
     try {
       const result = await getPortfolioAnalytics({
@@ -676,7 +697,7 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
         weights: portfolioAssets.map((asset) => Number(asset.weight) / 100),
         initial_value: initialValue,
         risk_free_rate: riskFreeRatePercent / 100,
-        start_date: startDate,
+        start_date: portfolioStartDate || startDate,
         end_date: endDate,
       });
 
@@ -689,6 +710,29 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
       );
     } finally {
       setPortfolioLoading(false);
+    }
+  }
+
+  async function runActualPortfolioAnalysis() {
+    setActualPortfolioLoading(true);
+    setActualPortfolioError("");
+    setActualPortfolioResult(null);
+
+    try {
+      const result = await getActualPortfolioAnalytics({
+        start_date: portfolioStartDate || undefined,
+        end_date: latestAvailableDate || undefined,
+      });
+
+      setActualPortfolioResult(result);
+    } catch (error) {
+      setActualPortfolioError(
+        error instanceof Error
+          ? error.message
+          : "Unable to calculate actual portfolio values.",
+      );
+    } finally {
+      setActualPortfolioLoading(false);
     }
   }
 
@@ -980,10 +1024,8 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
         {activePage === "portfolio-analysis" && (
           <PortfolioAnalysisPage
             stocks={stocks}
-            selectedPeriod={selectedPeriod}
-            setSelectedPeriod={setSelectedPeriod}
-            startDate={startDate}
-            endDate={endDate}
+            refreshPortfolioState={refreshPortfolioState}
+            portfolioSyncError={portfolioSyncError}
             latestAvailableDate={latestAvailableDate}
             portfolioAssets={portfolioAssets}
             portfolioInitialValue={portfolioInitialValue}
@@ -992,10 +1034,11 @@ const [scenarioShocks, setScenarioShocks] = useState<Record<string, string>>(
             setPortfolioRiskFreeRate={setPortfolioRiskFreeRate}
             portfolioWeightTotal={portfolioWeightTotal}
             portfolioWeightsValid={portfolioWeightsValid}
-            addPortfolioAsset={addPortfolioAsset}
-            updatePortfolioWeight={updatePortfolioWeight}
-            removePortfolioAsset={removePortfolioAsset}
             portfolioResult={portfolioResult}
+            actualPortfolioResult={actualPortfolioResult}
+            actualPortfolioLoading={actualPortfolioLoading}
+            actualPortfolioError={actualPortfolioError}
+            runActualPortfolioAnalysis={runActualPortfolioAnalysis}
             setPortfolioResult={setPortfolioResult}
             portfolioLoading={portfolioLoading}
             portfolioError={portfolioError}

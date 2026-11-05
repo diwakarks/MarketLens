@@ -117,6 +117,91 @@ def _finish_provider_refresh_log(
             )
 
 
+_US_EXCHANGE_ALIASES = {
+    "NASDAQ": "NMS",
+    "NMS": "NMS",
+    "NASDAQGS": "NMS",
+    "NASDAQ GLOBAL SELECT MARKET": "NMS",
+    "NGM": "NGM",
+    "NASDAQGM": "NGM",
+    "NASDAQ GLOBAL MARKET": "NGM",
+    "NCM": "NCM",
+    "NASDAQCM": "NCM",
+    "NASDAQ CAPITAL MARKET": "NCM",
+    "NYSE": "NYQ",
+    "NYQ": "NYQ",
+    "NEW YORK STOCK EXCHANGE": "NYQ",
+    "AMEX": "ASE",
+    "ASE": "ASE",
+    "NYSE AMERICAN": "ASE",
+    "PCX": "PCX",
+    "NYSEARCA": "PCX",
+}
+
+_US_EXCHANGE_LABELS = {
+    "NMS": "NASDAQ",
+    "NGM": "NASDAQ",
+    "NCM": "NASDAQ",
+    "NYQ": "NYSE",
+    "ASE": "AMEX",
+    "PCX": "NYSE Arca",
+}
+
+
+def _validate_us_equity_provider_metadata(
+    ticker: str, requested_exchange: str, requested_currency: str
+) -> tuple[str, str, str]:
+    """Return canonical metadata only when Yahoo confirms a supported US equity."""
+    try:
+        info = yf.Ticker(ticker).get_info()
+    except Exception as exc:
+        raise ValueError(
+            f"Could not verify {ticker} with the market-data provider. "
+            "Try again when provider data is available."
+        ) from exc
+
+    provider_symbol = str(info.get("symbol") or "").strip().upper()
+    quote_type = str(info.get("quoteType") or "").strip().upper()
+    provider_exchange = str(info.get("exchange") or "").strip().upper()
+    provider_currency = str(info.get("currency") or "").strip().upper()
+
+    if provider_symbol != ticker:
+        raise ValueError(
+            f"Provider metadata does not confirm the exact ticker {ticker}."
+        )
+
+    if quote_type != "EQUITY":
+        raise ValueError(
+            f"{ticker} is not identified as an equity by the provider."
+        )
+
+    if provider_currency != "USD":
+        raise ValueError(f"{ticker} is not a USD-denominated US equity.")
+
+    canonical_provider_exchange = _US_EXCHANGE_ALIASES.get(provider_exchange)
+    canonical_requested_exchange = _US_EXCHANGE_ALIASES.get(
+        requested_exchange.strip().upper()
+    )
+
+    if (
+        not canonical_provider_exchange
+        or canonical_provider_exchange != canonical_requested_exchange
+    ):
+        raise ValueError(
+            f"Exchange metadata for {ticker} does not match the provider."
+        )
+
+    if requested_currency.strip().upper() != provider_currency:
+        raise ValueError(f"{ticker} must use currency '{provider_currency}'.")
+
+    canonical_name = str(
+        info.get("longName") or info.get("shortName") or ticker
+    ).strip()
+    canonical_exchange = _US_EXCHANGE_LABELS[canonical_provider_exchange]
+
+    return canonical_name, canonical_exchange, provider_currency
+
+
 def import_market_data(
     ticker: str = "AAPL",
     *,
@@ -352,37 +437,18 @@ def download_and_import_market_data(
         raise ValueError(
             "Instrument name, exchange, and currency are required."
         )
-    supported_us_equities = {
-        "AAPL": ("NASDAQ", "USD"),
-        "MSFT": ("NASDAQ", "USD"),
-    }
 
     supported_benchmarks = {
         "^NSEI": ("NIFTY 50 Index", "NSE", "INR"),
         "^GSPC": ("S&P 500 Index", "INDEX", "USD"),
     }
 
-    if ticker in supported_us_equities:
-        expected_exchange, expected_currency = (
-            supported_us_equities[ticker]
-        )
-
-        if exchange.strip().upper() != expected_exchange:
-            raise ValueError(
-                f"{ticker} must use exchange '{expected_exchange}'."
-            )
-
-        if currency.strip().upper() != expected_currency:
-            raise ValueError(
-                f"{ticker} must use currency '{expected_currency}'."
-            )
-
-    elif ticker in supported_benchmarks:
+    if ticker in supported_benchmarks:
         expected_name, expected_exchange, expected_currency = (
             supported_benchmarks[ticker]
         )
 
-        if name.strip() != expected_name:
+        if name != expected_name:
             raise ValueError(
                 f"{ticker} must use the name '{expected_name}'."
             )
@@ -404,9 +470,7 @@ def download_and_import_market_data(
             )
 
         if currency.strip().upper() != "INR":
-            raise ValueError(
-                f"{ticker} must use currency 'INR'."
-            )
+            raise ValueError(f"{ticker} must use currency 'INR'.")
 
     elif ticker.endswith(".BO"):
         if exchange.strip().upper() != "BSE":
@@ -415,16 +479,13 @@ def download_and_import_market_data(
             )
 
         if currency.strip().upper() != "INR":
-            raise ValueError(
-                f"{ticker} must use currency 'INR'."
-            )
+            raise ValueError(f"{ticker} must use currency 'INR'.")
 
     else:
-        raise ValueError(
-            "Unsupported ticker. Supported instruments include "
-            "AAPL, MSFT, ^GSPC, ^NSEI, NSE/NSI equities, "
-            "and BSE equities."
+        name, exchange, currency = _validate_us_equity_provider_metadata(
+            ticker, exchange, currency
         )
+
 
     provider_refresh_id = _start_provider_refresh_log(ticker)
 

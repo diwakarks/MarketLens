@@ -14,7 +14,16 @@ import type {
 } from "../api";
 import { formatPrice, formatPercent } from "../utils/formatters";
 
-type Period = "1M" | "3M" | "6M" | "1Y" | "ALL";
+type Period =
+  | "1M"
+  | "3M"
+  | "6M"
+  | "1Y"
+  | "2Y"
+  | "3Y"
+  | "5Y"
+  | "10Y"
+  | "ALL";
 
 type StockAnalysisPageProps = {
   stocks: Stock[];
@@ -108,11 +117,17 @@ export default function StockAnalysisPage({
                   {stocks.length === 0 && (
                     <option value="">No stocks available</option>
                   )}
-                  {stocks.map((stock) => (
-                    <option key={stock.ticker} value={stock.ticker}>
-                      {stock.ticker}
-                    </option>
-                  ))}
+                  {stocks
+                    .filter(
+                      (stock) =>
+                        stock.ticker?.trim() &&
+                        stock.ticker.trim().toUpperCase() !== "UNKNOWN"
+                    )
+                    .map((stock) => (
+                      <option key={stock.ticker} value={stock.ticker}>
+                        {stock.ticker}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label className="stock-picker">
@@ -122,12 +137,17 @@ export default function StockAnalysisPage({
                   onChange={(event) =>
                     setSelectedPeriod(event.target.value as Period)
                   }
-                >
-                  <option value="1M">1 Month</option>
-                  <option value="3M">3 Months</option>
-                  <option value="6M">6 Months</option>
-                  <option value="1Y">1 Year</option>
-                  <option value="ALL">All Available data</option>
+            >
+                <option value="1M">1 Month</option>
+                <option value="3M">3 Months</option>
+                <option value="6M">6 Months</option>
+                <option value="1Y">1 Year</option>
+                <option value="2Y">2 Years</option>
+                <option value="3Y">3 Years</option>
+                <option value="5Y">5 Years</option>
+                <option value="10Y">10 Years</option>
+                <option value="ALL">All Available Data</option>
+
                 </select>
               </label>
             </section>

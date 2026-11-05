@@ -77,7 +77,7 @@ export default function StockSearch({ onStockImported }: StockSearchProps) {
           onKeyDown={(event) => {
             if (event.key === "Enter") void handleSearch();
           }}
-          placeholder="Try TCS, Groww, or Apollo Micro Systems"
+          placeholder="Try TCS, Groww, or Eternal"
           aria-label="Search stocks"
         />
 

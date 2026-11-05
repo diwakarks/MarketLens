@@ -2404,3 +2404,207 @@ button {
     transform: none;
   }
 }
+
+
+/* Transaction-based portfolio valuation */
+.portfolio-valuation {
+  margin-top: 20px;
+}
+
+.valuation-metrics {
+  margin-top: 18px;
+}
+
+.valuation-refresh {
+  padding: 8px 12px;
+  border: 1px solid #34445a;
+  border-radius: 7px;
+  background: #172334;
+  color: #e2eaf5;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.valuation-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.valuation-message {
+  margin: 16px 0 0;
+  color: #9aa8bb;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.valuation-error,
+.valuation-warning {
+  overflow-wrap: anywhere;
+}
+
+.valuation-error {
+  color: #ff9d9d;
+}
+
+.valuation-warning {
+  color: #f3c979;
+}
+
+.valuation-total-pnl {
+  margin: 18px 0;
+  color: #b9c6d8;
+  font-size: 14px;
+}
+
+.valuation-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid #202c3d;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.valuation-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: separate;
+  border-spacing: 0;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.valuation-table th,
+.valuation-table td {
+  padding: 13px 12px;
+  border-bottom: 1px solid #202c3d;
+  text-align: right;
+}
+
+.valuation-table th {
+  position: sticky;
+  top: 0;
+  background: #141e2b;
+  color: #9aa8bb;
+  font-weight: 500;
+  z-index: 1;
+}
+
+.valuation-table th:first-child,
+.valuation-table td:first-child {
+  position: sticky;
+  left: 0;
+  text-align: left;
+  background: #101722;
+  z-index: 2;
+}
+
+.valuation-table th:first-child {
+  z-index: 3;
+  background: #141e2b;
+}
+
+.valuation-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.valuation-table tbody tr:hover td {
+  background: #152131;
+}
+
+.valuation-table tbody tr:hover td:first-child {
+  background: #152131;
+}
+
+@media (max-width: 760px) {
+  .valuation-table {
+    min-width: 760px;
+  }
+}
+
+
+.valuation-table th,
+.valuation-table td {
+  padding: 13px 12px;
+  border-bottom: 1px solid #202c3d;
+  text-align: right;
+}
+
+.valuation-table th {
+  color: #9aa8bb;
+  font-weight: 500;
+}
+
+.valuation-table th:first-child,
+.valuation-table td:first-child {
+  text-align: left;
+}
+
+.valuation-table td {
+  color: #dce5f2;
+}
+
+.valuation-positive {
+  color: #55d6a0 !important;
+}
+
+.valuation-negative {
+  color: #ff8585 !important;
+}
+
+@media (max-width: 760px) {
+  .valuation-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .valuation-table {
+    min-width: 720px;
+  }
+}
+
+/* Portfolio transaction entry */
+.transaction-form {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #202c3d;
+}
+
+.transaction-form-heading {
+  margin-bottom: 16px;
+}
+
+.transaction-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.transaction-form-grid .portfolio-field {
+  min-width: 0;
+}
+
+.transaction-form-grid input,
+.transaction-form-grid select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.transaction-submit {
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .transaction-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .transaction-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

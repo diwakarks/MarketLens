@@ -20,14 +20,33 @@ def install_mock_provider(monkeypatch):
             ["2026-10-15", "2026-10-16"], name="Date"
         ),
     )
-
     class FakeTicker:
         def __init__(self, ticker):
-            calls["ticker"] = ticker
+            self.ticker = ticker
+
+        def get_info(self):
+            exchange_by_ticker = {
+                "AAPL": "NMS",
+                "MSFT": "NMS",
+                "META": "NMS",
+            }
+            return {
+                "symbol": (
+                    self.ticker
+                    if self.ticker in exchange_by_ticker
+                    else "OTHER"
+                ),
+                "quoteType": "EQUITY",
+                "exchange": exchange_by_ticker.get(self.ticker, "NMS"),
+                "currency": "USD",
+                "longName": f"{self.ticker} Inc.",
+            }
 
         def history(self, **kwargs):
+            calls["ticker"] = self.ticker
             calls["history_kwargs"] = kwargs
             return history.copy()
+
 
     monkeypatch.setattr(database_module.yf, "Ticker", FakeTicker)
     monkeypatch.setattr(

@@ -682,3 +682,204 @@ def test_import_stock_unexpected_failure_returns_502(monkeypatch):
     assert response.json()["detail"] == (
         "Unable to download or import market data."
     )
+
+
+def test_create_portfolio_transaction_success(monkeypatch):
+    def fake_record_transaction(**kwargs):
+        assert kwargs["ticker"] == "AAPL"
+        assert kwargs["transaction_type"] == "BUY"
+        assert kwargs["transaction_date"] == date(2026, 10, 20)
+        return {
+            "id": 1,
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10.0,
+            "price_per_share": 150.0,
+            "transaction_date": date(2026, 10, 20),
+            "fees": 2.0,
+        }
+
+    monkeypatch.setattr(api, "record_transaction", fake_record_transaction)
+
+    response = client.post(
+        "/portfolio/transactions",
+        json={
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "price_per_share": 150,
+            "transaction_date": "2026-10-20",
+            "fees": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["transaction"]["ticker"] == "AAPL"
+    assert body["transaction"]["transaction_date"] == "2026-10-20"
+    assert body["transaction"]["fees"] == 2.0
+
+
+def test_create_portfolio_transaction_rejects_invalid_transaction(
+    monkeypatch,
+):
+    def fake_record_transaction(**kwargs):
+        raise ValueError("Transaction type must be BUY or SELL.")
+
+    monkeypatch.setattr(api, "record_transaction", fake_record_transaction)
+
+    response = client.post(
+        "/portfolio/transactions",
+        json={
+            "ticker": "AAPL",
+            "transaction_type": "HOLD",
+            "quantity": 10,
+            "price_per_share": 150,
+            "transaction_date": "2026-10-20",
+            "fees": 0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "BUY or SELL" in response.json()["detail"]
+
+
+def test_create_portfolio_transaction_rejects_invalid_quantity():
+    response = client.post(
+        "/portfolio/transactions",
+        json={
+            "ticker": "AAPL",
+            "transaction_type": "BUY",
+            "quantity": 0,
+            "price_per_share": 150,
+            "transaction_date": "2026-10-20",
+            "fees": 0,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_portfolio_holdings_returns_holdings(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "get_holdings",
+        lambda: [
+            {
+                "ticker": "AAPL",
+                "quantity": 10.0,
+                "average_cost": 150.0,
+                "cost_basis": 1500.0,
+                "realized_pnl": 25.0,
+            }
+        ],
+    )
+
+    response = client.get("/portfolio/holdings")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["holdings"][0]["ticker"] == "AAPL"
+    assert body["holdings"][0]["quantity"] == 10.0
+    assert body["holdings"][0]["cost_basis"] == 1500.0
+
+
+def test_portfolio_holdings_returns_empty_list(monkeypatch):
+    monkeypatch.setattr(api, "get_holdings", lambda: [])
+
+    response = client.get("/portfolio/holdings")
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 0, "holdings": []}
+
+
+def test_portfolio_holdings_handles_ledger_error(monkeypatch):
+    def fake_get_holdings():
+        raise ValueError("Ledger data is inconsistent.")
+
+    monkeypatch.setattr(api, "get_holdings", fake_get_holdings)
+
+    response = client.get("/portfolio/holdings")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Ledger data is inconsistent."
+
+
+def test_portfolio_valuation_endpoint_returns_summary(monkeypatch):
+    expected = {
+        "positions": [
+            {
+                "ticker": "AAPL",
+                "quantity": 10,
+                "cost_basis": 1000,
+                "latest_price": 120,
+                "market_value": 1200,
+                "unrealized_pnl": 200,
+                "unrealized_pnl_pct": 20,
+                "realized_pnl": 50,
+            }
+        ],
+        "count": 1,
+        "total_market_value": 1200,
+        "total_cost_basis": 1000,
+        "total_realized_pnl": 50,
+        "total_unrealized_pnl": 200,
+        "total_pnl": 250,
+        "unpriced_tickers": [],
+    }
+
+    monkeypatch.setattr(
+        api,
+        "get_portfolio_valuation",
+        lambda: expected,
+    )
+
+    response = client.get("/portfolio/valuation")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["positions"][0]["ticker"] == "AAPL"
+    assert body["total_market_value"] == 1200
+    assert body["total_pnl"] == 250
+
+
+def test_portfolio_valuation_endpoint_handles_empty_portfolio(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "get_portfolio_valuation",
+        lambda: {
+            "positions": [],
+            "count": 0,
+            "total_market_value": 0,
+            "total_cost_basis": 0,
+            "total_realized_pnl": 0,
+            "total_unrealized_pnl": 0,
+            "total_pnl": 0,
+            "unpriced_tickers": [],
+        },
+    )
+
+    response = client.get("/portfolio/valuation")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 0
+    assert response.json()["positions"] == []
+
+
+def test_portfolio_valuation_endpoint_handles_service_error(monkeypatch):
+    def fake_valuation():
+        raise ValueError("Ledger data is inconsistent.")
+
+    monkeypatch.setattr(
+        api,
+        "get_portfolio_valuation",
+        fake_valuation,
+    )
+
+    response = client.get("/portfolio/valuation")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Ledger data is inconsistent."

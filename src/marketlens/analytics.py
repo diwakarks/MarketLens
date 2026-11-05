@@ -11,6 +11,652 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
 
 
+def calculate_actual_portfolio_xirr(
+    transactions: list[dict],
+    terminal_value: float,
+    terminal_date,
+) -> dict:
+    """
+    Calculate transaction-based XIRR for an actual portfolio.
+
+    BUY: negative cash flow (purchase cost + fees).
+    SELL: positive cash flow (sale proceeds - fees).
+    Terminal value: positive cash flow representing remaining
+    holdings at the end of the measurement period.
+
+    External deposits, withdrawals, and dividends are not included
+    unless they are explicitly represented in the transaction data.
+    """
+    if not transactions:
+        raise ValueError("At least one transaction is required.")
+
+    if (
+        isinstance(terminal_value, bool)
+        or not isinstance(terminal_value, (int, float))
+        or not np.isfinite(terminal_value)
+        or terminal_value < 0
+    ):
+        raise ValueError("Terminal value must be finite and non-negative.")
+
+    terminal_date = pd.Timestamp(terminal_date).normalize()
+
+    cash_flows = {}
+
+    for transaction in transactions:
+        transaction_type = str(
+            transaction["transaction_type"]
+        ).strip().upper()
+
+        if transaction_type not in {"BUY", "SELL"}:
+            raise ValueError(
+                f"Invalid transaction type: {transaction_type}"
+            )
+
+        quantity = float(transaction["quantity"])
+        price = float(transaction["price_per_share"])
+        fees = float(transaction.get("fees", 0))
+
+        if (
+            not np.isfinite(quantity)
+            or not np.isfinite(price)
+            or not np.isfinite(fees)
+            or quantity <= 0
+            or price <= 0
+            or fees < 0
+        ):
+            raise ValueError(
+                "Transaction quantity, price, and fees must be valid."
+            )
+
+        transaction_date = pd.Timestamp(
+            transaction["transaction_date"]
+        ).normalize()
+
+        if transaction_date > terminal_date:
+            raise ValueError(
+                "Terminal date cannot precede a transaction date."
+            )
+
+        gross_amount = quantity * price
+
+        if transaction_type == "BUY":
+            amount = -(gross_amount + fees)
+        else:
+            amount = gross_amount - fees
+
+        cash_flows[transaction_date] = (
+            cash_flows.get(transaction_date, 0.0) + amount
+        )
+
+    cash_flows[terminal_date] = (
+        cash_flows.get(terminal_date, 0.0) + float(terminal_value)
+    )
+
+    dated_flows = sorted(cash_flows.items())
+
+    amounts = [amount for _, amount in dated_flows]
+
+    if not any(amount < 0 for amount in amounts):
+        raise ValueError(
+            "XIRR requires at least one negative cash flow."
+        )
+
+    if not any(amount > 0 for amount in amounts):
+        raise ValueError(
+            "XIRR requires at least one positive cash flow."
+        )
+
+    first_date = dated_flows[0][0]
+
+    years = np.array(
+        [(date - first_date).days / 365.0 for date, _ in dated_flows],
+        dtype=float,
+    )
+
+    values = np.array(amounts, dtype=float)
+
+    def npv(rate):
+        if rate <= -1.0:
+            return np.nan
+
+        with np.errstate(over="ignore", invalid="ignore"):
+            return np.sum(values / np.power(1.0 + rate, years))
+
+    # Search in log(1 + rate) space. This allows a wide range of
+    # negative and positive annualized returns while avoiding rates <= -1.
+    log_rate_grid = np.linspace(-20.0, np.log(1_000_001.0), 2000)
+    rate_grid = np.expm1(log_rate_grid)
+
+    brackets = []
+    previous_rate = rate_grid[0]
+    previous_npv = npv(previous_rate)
+
+    for rate in rate_grid[1:]:
+        current_npv = npv(rate)
+
+        if (
+            np.isfinite(previous_npv)
+            and np.isfinite(current_npv)
+            and (
+                previous_npv == 0
+                or current_npv == 0
+                or np.sign(previous_npv) != np.sign(current_npv)
+            )
+        ):
+            brackets.append((previous_rate, rate))
+
+        previous_rate = rate
+        previous_npv = current_npv
+
+    if not brackets:
+        raise ValueError(
+            "XIRR could not find a valid solution for these cash flows."
+        )
+
+    # If multiple roots exist, choose the one closest to zero.
+    roots = []
+
+    for lower, upper in brackets:
+        lower_npv = npv(lower)
+
+        if lower_npv == 0:
+            roots.append(lower)
+            continue
+
+        for _ in range(200):
+            midpoint = (lower + upper) / 2.0
+            midpoint_npv = npv(midpoint)
+
+            if not np.isfinite(midpoint_npv):
+                upper = midpoint
+                continue
+
+            if abs(midpoint_npv) < 1e-8:
+                lower = midpoint
+                upper = midpoint
+                break
+
+            if np.sign(lower_npv) != np.sign(midpoint_npv):
+                upper = midpoint
+            else:
+                lower = midpoint
+                lower_npv = midpoint_npv
+
+        root = (lower + upper) / 2.0
+
+        if np.isfinite(root) and root > -1.0:
+            roots.append(root)
+
+    if not roots:
+        raise ValueError("XIRR calculation did not converge.")
+
+    xirr = min(roots, key=abs)
+
+    return {
+        "xirr": float(xirr),
+        "xirr_percent": float(xirr * 100.0),
+        "cash_flow_count": len(dated_flows),
+        "start_date": first_date.date().isoformat(),
+        "end_date": terminal_date.date().isoformat(),
+        "terminal_value": float(terminal_value),
+        "method": "transaction_based_xirr",
+        "limitations": [
+            "External deposits and withdrawals are not included.",
+            "Dividends are not included unless recorded as transactions.",
+            "Multiple mathematical roots may exist; the root closest to zero is selected.",
+        ],
+    }
+
+
+def calculate_time_weighted_return(
+    daily_valuations: list[dict],
+    external_cash_flows: list[dict] | None = None,
+) -> dict:
+    """
+    Calculate daily-linked Time-Weighted Return (TWR).
+
+    daily_valuations:
+        [{"date": "YYYY-MM-DD", "portfolio_value": 1000.0}, ...]
+
+    external_cash_flows:
+        [{"date": "YYYY-MM-DD", "amount": 200.0}, ...]
+
+    Cash-flow convention:
+        Positive amount = external contribution into portfolio.
+        Negative amount = external withdrawal from portfolio.
+
+    Assumption:
+        External cash flows occur at the end of their valuation day.
+        For intraday flows, exact timing and valuations are required.
+    """
+    if not daily_valuations or len(daily_valuations) < 2:
+        raise ValueError(
+            "At least two daily valuations are required for TWR."
+        )
+
+    external_cash_flows = external_cash_flows or []
+
+    normalized_values = []
+
+    for item in daily_valuations:
+        date = pd.Timestamp(item["date"]).normalize()
+        value = item.get("portfolio_value")
+
+        if (
+            value is None
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"Invalid or incomplete portfolio valuation on {date.date()}."
+            )
+
+        normalized_values.append(
+            {"date": date, "value": float(value)}
+        )
+
+    normalized_values.sort(key=lambda item: item["date"])
+
+    dates = [item["date"] for item in normalized_values]
+
+    if len(set(dates)) != len(dates):
+        raise ValueError("Daily valuation dates must be unique.")
+
+    cash_flows_by_date = {}
+
+    for item in external_cash_flows:
+        date = pd.Timestamp(item["date"]).normalize()
+        amount = item["amount"]
+
+        if (
+            isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or not np.isfinite(amount)
+        ):
+            raise ValueError("External cash-flow amounts must be finite.")
+
+        if date not in dates:
+            raise ValueError(
+                f"External cash flow on {date.date()} "
+                "has no matching portfolio valuation."
+            )
+
+        cash_flows_by_date[date] = (
+            cash_flows_by_date.get(date, 0.0) + float(amount)
+        )
+
+    daily_returns = []
+    growth_factor = 1.0
+
+    for index in range(1, len(normalized_values)):
+        previous = normalized_values[index - 1]
+        current = normalized_values[index]
+
+        previous_value = previous["value"]
+        current_value = current["value"]
+        current_date = current["date"]
+
+        external_flow = cash_flows_by_date.get(current_date, 0.0)
+
+        if previous_value <= 0:
+            raise ValueError(
+                "TWR cannot be calculated when the previous "
+                "portfolio value is zero or negative."
+            )
+
+        adjusted_end_value = current_value - external_flow
+
+        daily_return = (
+            adjusted_end_value / previous_value
+        ) - 1.0
+
+        if not np.isfinite(daily_return) or daily_return < -1.0:
+            raise ValueError(
+                f"Invalid daily return on {current_date.date()}."
+            )
+
+        growth_factor *= (1.0 + daily_return)
+
+        daily_returns.append(
+            {
+                "date": current_date.date().isoformat(),
+                "daily_return": float(daily_return),
+                "daily_return_percent": float(daily_return * 100.0),
+                "external_cash_flow": float(external_flow),
+                "cumulative_twr": float(growth_factor - 1.0),
+                "cumulative_twr_percent": float(
+                    (growth_factor - 1.0) * 100.0
+                ),
+            }
+        )
+
+    total_twr = growth_factor - 1.0
+
+    start_date = dates[0]
+    end_date = dates[-1]
+    total_days = (end_date - start_date).days
+
+    annualized_twr = None
+
+    if total_days > 0 and growth_factor > 0:
+        annualized_twr = (
+            growth_factor ** (365.0 / total_days)
+        ) - 1.0
+
+    return {
+        "twr": float(total_twr),
+        "twr_percent": float(total_twr * 100.0),
+        "annualized_twr": (
+            float(annualized_twr)
+            if annualized_twr is not None
+            else None
+        ),
+        "annualized_twr_percent": (
+            float(annualized_twr * 100.0)
+            if annualized_twr is not None
+            else None
+        ),
+        "start_date": start_date.date().isoformat(),
+        "end_date": end_date.date().isoformat(),
+        "total_days": total_days,
+        "daily_returns": daily_returns,
+        "method": "daily_linked_twr",
+        "assumption": (
+            "External cash flows are treated as occurring "
+            "at the end of each valuation day."
+        ),
+    }
+
+
+def calculate_portfolio_drawdown(
+    daily_valuations: list[dict],
+) -> dict:
+    """
+    Calculate portfolio drawdown from daily valuations.
+
+    Drawdown = (Portfolio Value / Running Peak) - 1
+
+    Maximum drawdown is the largest peak-to-trough decline.
+    Drawdown duration measures time below the previous peak.
+    """
+    if not daily_valuations or len(daily_valuations) < 2:
+        raise ValueError(
+            "At least two daily valuations are required for drawdown."
+        )
+
+    normalized = []
+
+    for item in daily_valuations:
+        date = pd.Timestamp(item["date"]).normalize()
+        value = item.get("portfolio_value")
+
+        if (
+            value is None
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"Invalid or incomplete portfolio valuation on {date.date()}."
+            )
+
+        normalized.append({
+            "date": date,
+            "value": float(value),
+        })
+
+    normalized.sort(key=lambda item: item["date"])
+
+    dates = [item["date"] for item in normalized]
+
+    if len(set(dates)) != len(dates):
+        raise ValueError("Daily valuation dates must be unique.")
+
+    running_peak = normalized[0]["value"]
+    peak_date = normalized[0]["date"]
+
+    max_drawdown = 0.0
+    max_drawdown_peak_date = peak_date
+    max_drawdown_trough_date = peak_date
+
+    current_drawdown_start = None
+    current_drawdown_peak_date = None
+
+    max_drawdown_duration_days = 0
+    max_drawdown_duration_peak_date = None
+    max_drawdown_duration_recovery_date = None
+
+    current_drawdown_duration_days = 0
+    current_drawdown_duration_peak_date = None
+
+    drawdown_series = []
+
+    for item in normalized:
+        date = item["date"]
+        value = item["value"]
+
+        if value >= running_peak:
+            # Previous drawdown has recovered.
+            if current_drawdown_start is not None:
+                duration = (date - current_drawdown_start).days
+
+                if duration > max_drawdown_duration_days:
+                    max_drawdown_duration_days = duration
+                    max_drawdown_duration_peak_date = (
+                        current_drawdown_duration_peak_date
+                    )
+                    max_drawdown_duration_recovery_date = date
+
+                current_drawdown_start = None
+                current_drawdown_peak_date = None
+                current_drawdown_duration_peak_date = None
+
+            running_peak = value
+            peak_date = date
+
+            drawdown = 0.0
+
+        else:
+            drawdown = (value / running_peak) - 1.0
+
+            if current_drawdown_start is None:
+                current_drawdown_start = peak_date
+                current_drawdown_peak_date = peak_date
+                current_drawdown_duration_peak_date = peak_date
+
+            current_drawdown_duration_days = (
+                date - current_drawdown_start
+            ).days
+
+        if drawdown < max_drawdown:
+            max_drawdown = drawdown
+            max_drawdown_peak_date = peak_date
+            max_drawdown_trough_date = date
+
+        drawdown_series.append({
+            "date": date.date().isoformat(),
+            "portfolio_value": value,
+            "running_peak": running_peak,
+            "drawdown": float(drawdown),
+            "drawdown_percent": float(drawdown * 100.0),
+        })
+
+    # If the portfolio has not yet recovered, its drawdown duration
+    # is still ongoing as of the last available valuation.
+    ongoing_drawdown = current_drawdown_start is not None
+
+    if ongoing_drawdown:
+        last_date = normalized[-1]["date"]
+
+        current_drawdown_duration_days = (
+            last_date - current_drawdown_start
+        ).days
+
+        if current_drawdown_duration_days > max_drawdown_duration_days:
+            max_drawdown_duration_days = (
+                current_drawdown_duration_days
+            )
+            max_drawdown_duration_peak_date = (
+                current_drawdown_duration_peak_date
+            )
+            max_drawdown_duration_recovery_date = None
+
+    return {
+        "maximum_drawdown": float(max_drawdown),
+        "maximum_drawdown_percent": float(max_drawdown * 100.0),
+        "peak_date": max_drawdown_peak_date.date().isoformat(),
+        "trough_date": max_drawdown_trough_date.date().isoformat(),
+        "maximum_drawdown_duration_days": (
+            int(max_drawdown_duration_days)
+        ),
+        "drawdown_duration_peak_date": (
+            max_drawdown_duration_peak_date.date().isoformat()
+            if max_drawdown_duration_peak_date is not None
+            else None
+        ),
+        "drawdown_recovery_date": (
+            max_drawdown_duration_recovery_date.date().isoformat()
+            if max_drawdown_duration_recovery_date is not None
+            else None
+        ),
+        "drawdown_ongoing": ongoing_drawdown,
+        "current_drawdown_duration_days": (
+            int(current_drawdown_duration_days)
+            if ongoing_drawdown
+            else 0
+        ),
+        "series": drawdown_series,
+        "method": "peak_to_trough_drawdown",
+    }
+
+def calculate_portfolio_risk_metrics(
+    daily_valuations: list[dict],
+    risk_free_rate: float = 0.065,
+) -> dict:
+    """
+    Calculate annualized volatility and Sharpe ratio from daily
+    portfolio valuations.
+
+    Assumptions:
+    - 252 trading days per year.
+    - Risk-free rate is annualized (default 6.5%).
+    - Daily returns are calculated from consecutive valuations.
+    - No external cash-flow adjustment is applied here.
+      Use TWR returns for cash-flow-adjusted performance.
+    """
+    if not daily_valuations or len(daily_valuations) < 2:
+        raise ValueError(
+            "At least two daily valuations are required for risk metrics."
+        )
+
+    if (
+        isinstance(risk_free_rate, bool)
+        or not isinstance(risk_free_rate, (int, float))
+        or not np.isfinite(risk_free_rate)
+        or risk_free_rate <= -1.0
+    ):
+        raise ValueError("Risk-free rate must be finite and greater than -100%.")
+
+    normalized = []
+
+    for item in daily_valuations:
+        date = pd.Timestamp(item["date"]).normalize()
+        value = item.get("portfolio_value")
+
+        if (
+            value is None
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"Invalid or incomplete portfolio valuation on {date.date()}."
+            )
+
+        normalized.append({
+            "date": date,
+            "value": float(value),
+        })
+
+    normalized.sort(key=lambda item: item["date"])
+
+    dates = [item["date"] for item in normalized]
+
+    if len(set(dates)) != len(dates):
+        raise ValueError("Daily valuation dates must be unique.")
+
+    daily_returns = []
+
+    for index in range(1, len(normalized)):
+        previous_value = normalized[index - 1]["value"]
+        current_value = normalized[index]["value"]
+
+        if previous_value <= 0:
+            raise ValueError(
+                "Returns cannot be calculated from a zero "
+                "or negative starting portfolio value."
+            )
+
+        daily_return = current_value / previous_value - 1.0
+
+        if not np.isfinite(daily_return):
+            raise ValueError("Daily return calculation produced an invalid value.")
+
+        daily_returns.append(float(daily_return))
+
+    returns = np.array(daily_returns, dtype=float)
+
+    if len(returns) < 2:
+        raise ValueError(
+            "At least two daily returns are required to estimate volatility."
+        )
+
+    daily_volatility = float(np.std(returns, ddof=1))
+    annualized_volatility = daily_volatility * np.sqrt(252.0)
+
+    daily_risk_free_rate = (
+        (1.0 + float(risk_free_rate)) ** (1.0 / 252.0)
+    ) - 1.0
+
+    excess_returns = returns - daily_risk_free_rate
+
+    mean_daily_excess_return = float(np.mean(excess_returns))
+
+    if daily_volatility == 0:
+        sharpe_ratio = None
+        sharpe_unavailable_reason = (
+            "Sharpe ratio is undefined because daily volatility is zero."
+        )
+    else:
+        sharpe_ratio = (
+            mean_daily_excess_return / daily_volatility
+        ) * np.sqrt(252.0)
+        sharpe_unavailable_reason = None
+
+    return {
+        "daily_volatility": daily_volatility,
+        "daily_volatility_percent": daily_volatility * 100.0,
+        "annualized_volatility": float(annualized_volatility),
+        "annualized_volatility_percent": (
+            float(annualized_volatility * 100.0)
+        ),
+        "sharpe_ratio": (
+            float(sharpe_ratio)
+            if sharpe_ratio is not None
+            else None
+        ),
+        "sharpe_unavailable_reason": sharpe_unavailable_reason,
+        "risk_free_rate": float(risk_free_rate),
+        "observations": int(len(returns)),
+        "annualization_factor": 252,
+        "method": "daily_returns_sample_std_annualized",
+    }
+
+
 def load_market_data(ticker: str = "AAPL") -> pd.DataFrame:
     """Load historical market data from a CSV file."""
     ticker = ticker.strip().upper()
@@ -957,6 +1603,245 @@ def calculate_portfolio_analytics(
             }
             for pos, timestamp in enumerate(portfolio_returns.index)
         ],
+    }
+
+
+
+def calculate_actual_portfolio_series(
+    transactions: list[dict],
+    market_data: dict[str, pd.DataFrame],
+    start_date=None,
+    end_date=None,
+) -> dict:
+    """Value the actual portfolio from its transaction ledger and daily prices.
+
+    Transactions on a trading date are applied before that date's closing
+    valuation.
+
+    A portfolio valuation is considered complete only when every open
+    position has a sufficiently recent closing price. Missing and stale
+    prices are excluded from the diagnostic partial value but cause the
+    official portfolio_value to be None.
+
+    This returns market values, not cash-flow-adjusted investment returns.
+    """
+    if not transactions:
+        raise ValueError("Record at least one portfolio transaction first.")
+
+    # Maximum age allowed for a closing price before it is considered stale.
+    max_price_age_days = 7
+
+    normalized_transactions = []
+
+    for transaction in transactions:
+        ticker = str(transaction["ticker"]).strip().upper()
+        transaction_type = str(
+            transaction["transaction_type"]
+        ).strip().upper()
+
+        if not ticker:
+            raise ValueError("Transaction ticker cannot be empty.")
+
+        if transaction_type not in {"BUY", "SELL"}:
+            raise ValueError(f"Invalid transaction type: {transaction_type}")
+
+        quantity = float(transaction["quantity"])
+        trade_date = pd.Timestamp(
+            transaction["transaction_date"]
+        ).normalize()
+
+        if not np.isfinite(quantity) or quantity <= 0:
+            raise ValueError("Transaction quantities must be positive.")
+
+        normalized_transactions.append(
+            {
+                "ticker": ticker,
+                "type": transaction_type,
+                "quantity": quantity,
+                "date": trade_date,
+                "id": int(transaction.get("id", 0)),
+            }
+        )
+
+    normalized_transactions.sort(
+        key=lambda item: (item["date"], item["id"])
+    )
+
+    earliest_transaction = min(
+        item["date"] for item in normalized_transactions
+    )
+
+    close_series = {}
+
+    for ticker, data in market_data.items():
+        normalized_ticker = ticker.strip().upper()
+
+        if "Close" not in data.columns:
+            raise ValueError(
+                f"Market data for {normalized_ticker} has no Close column."
+            )
+
+        close = data["Close"].copy()
+        close.index = pd.to_datetime(
+            close.index, utc=True
+        ).tz_localize(None)
+        close.index = close.index.normalize()
+        close = pd.to_numeric(close, errors="coerce")
+
+        # Reject invalid or non-positive prices.
+        close = close[close.notna() & (close > 0)]
+
+        close = close[~close.index.duplicated(keep="last")].sort_index()
+
+        if not close.empty:
+            close_series[normalized_ticker] = close
+
+    if not close_series:
+        raise ValueError("No valid historical closing prices are available.")
+
+    latest_price_date = max(
+        series.index.max() for series in close_series.values()
+    )
+
+    first_date = (
+        pd.Timestamp(start_date).normalize()
+        if start_date
+        else earliest_transaction
+    )
+
+    last_date = (
+        pd.Timestamp(end_date).normalize()
+        if end_date
+        else latest_price_date
+    )
+
+    if first_date > last_date:
+        raise ValueError("start_date must be on or before end_date.")
+
+    all_dates = sorted(
+        set().union(
+            *(set(series.index) for series in close_series.values())
+        )
+    )
+
+    dates = [
+        timestamp
+        for timestamp in all_dates
+        if first_date <= timestamp <= last_date
+    ]
+
+    if not dates:
+        raise ValueError("No market-data dates exist in the selected range.")
+
+    holdings = {}
+    transaction_index = 0
+    records = []
+
+    for timestamp in dates:
+
+        # Apply transactions before the closing valuation for this date.
+        while (
+            transaction_index < len(normalized_transactions)
+            and normalized_transactions[transaction_index]["date"]
+            <= timestamp
+        ):
+            transaction = normalized_transactions[transaction_index]
+            ticker = transaction["ticker"]
+            quantity = transaction["quantity"]
+            current_quantity = holdings.get(ticker, 0.0)
+
+            if transaction["type"] == "BUY":
+                holdings[ticker] = current_quantity + quantity
+
+            else:
+                if quantity > current_quantity + 1e-9:
+                    raise ValueError(
+                        f"Ledger inconsistency: sale of {ticker} exceeds "
+                        f"holdings on {timestamp.date()}."
+                    )
+
+                remaining = current_quantity - quantity
+
+                if remaining <= 1e-9:
+                    holdings.pop(ticker, None)
+                else:
+                    holdings[ticker] = remaining
+
+            transaction_index += 1
+
+        partial_portfolio_value = 0.0
+        priced_positions = {}
+        missing_prices = []
+        stale_tickers = []
+
+        for ticker, quantity in holdings.items():
+
+            if ticker not in close_series:
+                missing_prices.append(ticker)
+                continue
+
+            ticker_prices = close_series[ticker]
+
+            # Find the most recent actual closing price on or before
+            # this valuation date. Never use a future price.
+            available_prices = ticker_prices.loc[
+                ticker_prices.index <= timestamp
+            ]
+
+            if available_prices.empty:
+                missing_prices.append(ticker)
+                continue
+
+            price_date = available_prices.index[-1]
+            price = float(available_prices.iloc[-1])
+
+            price_age_days = (timestamp - price_date).days
+
+            if price_age_days > max_price_age_days:
+                stale_tickers.append(ticker)
+                continue
+
+            position_value = quantity * price
+            partial_portfolio_value += position_value
+
+            priced_positions[ticker] = {
+                "quantity": quantity,
+                "price": price,
+                "price_date": price_date.date().isoformat(),
+                "price_age_days": price_age_days,
+                "market_value": position_value,
+            }
+
+        missing_prices = sorted(set(missing_prices))
+        stale_tickers = sorted(set(stale_tickers))
+
+        is_complete = not missing_prices and not stale_tickers
+
+        records.append(
+            {
+                "date": timestamp.date().isoformat(),
+
+                # Do not represent a partial value as the total portfolio.
+                "portfolio_value": (
+                    partial_portfolio_value if is_complete else None
+                ),
+
+                # Diagnostic value: sum of positions that could be priced.
+                "partial_portfolio_value": partial_portfolio_value,
+
+                "is_complete": is_complete,
+                "positions": priced_positions,
+                "unpriced_tickers": missing_prices,
+                "stale_tickers": stale_tickers,
+            }
+        )
+
+    return {
+        "start_date": dates[0].date().isoformat(),
+        "end_date": dates[-1].date().isoformat(),
+        "transaction_start_date": earliest_transaction.date().isoformat(),
+        "max_price_age_days": max_price_age_days,
+        "series": records,
     }
 
 
