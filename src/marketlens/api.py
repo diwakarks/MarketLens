@@ -7,7 +7,6 @@ import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-from yfinance import tickers
 
 from src.marketlens.analytics import (
     calculate_actual_portfolio_series,
@@ -32,13 +31,12 @@ from src.marketlens.database import (
     get_refresh_status,
     download_and_import_market_data,
 )
-
-from src.marketlens.portfolio_ledger import (
-    record_transaction,
-    get_holdings,
-    get_portfolio_valuation,
+from src.marketlens.fundamentals import (
+    FundamentalsDataUnavailableError,
+    FundamentalsProviderError,
+    calculate_fundamental_metrics,
+    fetch_annual_fundamentals,
 )
-
 from src.marketlens.ai_analyst import (
     AIAnalystError,
     answer_market_question,
@@ -50,8 +48,8 @@ from src.marketlens.portfolio_ledger import (
     get_portfolio_valuation,
     update_transaction,
     delete_transaction,
+    get_transaction_history,
 )
-from .portfolio_ledger import get_transaction_history
 
 app = FastAPI(
     title="MarketLens API",
@@ -389,7 +387,31 @@ def list_stocks(market: str | None = None) -> list[dict]:
 
     return stocks
 
+@app.get("/stocks/{ticker}/fundamentals", tags=["Fundamentals"])
+def get_stock_fundamentals(ticker: str) -> dict:
+    """Retrieve annual statements and calculate fundamental metrics."""
+    ticker = _normalize_stock_ticker(ticker)
 
+    try:
+        fundamentals = fetch_annual_fundamentals(ticker)
+
+        fundamentals["analysis"] = calculate_fundamental_metrics(
+            fundamentals
+        )
+
+        return fundamentals
+
+    except FundamentalsDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except FundamentalsProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
 @app.get("/stocks/{ticker}/metrics", tags=["Analytics"])
 def get_stock_metrics(
     ticker: str,
@@ -401,18 +423,16 @@ def get_stock_metrics(
     benchmark = get_benchmark_details(ticker)
 
     try:
-        market_data = load_market_data_from_db(ticker)
+        market_data = _load_filtered_stock_data(
+            ticker,
+            start_date,
+            end_date,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=404,
             detail=str(exc),
         ) from exc
-
-    market_data = _load_filtered_stock_data(
-        ticker,
-        start_date,
-        end_date,
-    )
 
     _, summary = calculate_metrics(market_data)
 
@@ -452,14 +472,13 @@ def get_stock_metrics(
         market_data,
         confidence_level=0.95,
     )
+
     return {
         "ticker": ticker,
         "benchmark": benchmark["ticker"],
         "benchmark_name": benchmark["name"],
         "metrics": summary,
     }
-
-
 
 @app.get("/stocks/{ticker}/history", tags=["Analytics"])
 def get_stock_history(
@@ -1028,22 +1047,6 @@ def get_actual_portfolio_analytics(
             status_code=400,
             detail=str(exc),
         ) from exc
-
-
-class ActualPortfolioAnalyticsRequest(BaseModel):
-    risk_free_rate: float = Field(default=0.065, ge=0)
-    start_date: date | None = None
-    end_date: date | None = None
-
-    @model_validator(mode="after")
-    def validate_date_range(self):
-        if (
-            self.start_date
-            and self.end_date
-            and self.start_date > self.end_date
-        ):
-            raise ValueError("start_date must be on or before end_date.")
-        return self
 
 
 class PortfolioScenarioRequest(BaseModel):

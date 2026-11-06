@@ -883,3 +883,59 @@ def test_portfolio_valuation_endpoint_handles_service_error(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Ledger data is inconsistent."
+
+def test_stock_fundamentals_endpoint_success(monkeypatch):
+    expected = {
+        "ticker": "RELIANCE.NS",
+        "provider": "yfinance",
+        "periods": ["2025-03-31"],
+        "statements": {},
+        "coverage": {},
+    }
+
+    monkeypatch.setattr(
+        api,
+        "fetch_annual_fundamentals",
+        lambda ticker: expected,
+    )
+
+    response = client.get("/stocks/RELIANCE.NS/fundamentals")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_stock_fundamentals_endpoint_data_unavailable(monkeypatch):
+    def fake_fetch(ticker):
+        raise api.FundamentalsDataUnavailableError(
+            "No annual statements available."
+        )
+
+    monkeypatch.setattr(
+        api,
+        "fetch_annual_fundamentals",
+        fake_fetch,
+    )
+
+    response = client.get("/stocks/RELIANCE.NS/fundamentals")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No annual statements available."
+
+
+def test_stock_fundamentals_endpoint_provider_error(monkeypatch):
+    def fake_fetch(ticker):
+        raise api.FundamentalsProviderError(
+            "Yahoo Finance unavailable."
+        )
+
+    monkeypatch.setattr(
+        api,
+        "fetch_annual_fundamentals",
+        fake_fetch,
+    )
+
+    response = client.get("/stocks/RELIANCE.NS/fundamentals")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Yahoo Finance unavailable."

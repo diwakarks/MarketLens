@@ -1,7 +1,6 @@
 
 from datetime import date
 from decimal import Decimal, InvalidOperation
-import math
 
 from src.marketlens.database import get_connection
 

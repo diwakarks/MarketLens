@@ -537,12 +537,51 @@ def download_and_import_market_data(
             )
 
         values = candidate[numeric_columns].to_numpy(dtype=float)
+        invalid_mask = ~np.isfinite(values)
 
-        if not np.isfinite(values).all():
-            raise ValueError(
-                "Provider data contains missing or non-finite values."
-            )
+        if invalid_mask.any():
+            ohlc_columns = ["Open", "High", "Low", "Close"]
+            available_ohlc = [
+                column for column in ohlc_columns
+                if column in candidate.columns
+            ]
 
+            if available_ohlc and len(candidate) > 0:
+                latest_index = candidate.index[-1]
+                latest_ohlc = candidate.loc[latest_index, available_ohlc]
+
+                latest_ohlc_missing = (
+                    ~np.isfinite(
+                        pd.to_numeric(latest_ohlc, errors="coerce").to_numpy(
+                            dtype=float
+                        )
+                    )
+                ).all()
+
+                if latest_ohlc_missing:
+                    candidate = candidate.iloc[:-1].copy()
+                    values = candidate[numeric_columns].to_numpy(dtype=float)
+                    invalid_mask = ~np.isfinite(values)
+
+            if invalid_mask.any():
+                invalid_rows = ~np.isfinite(values).all(axis=1)
+                invalid_details = []
+
+                for row_index in np.where(invalid_rows)[0][:10]:
+                    bad_columns = [
+                        numeric_columns[column_index]
+                        for column_index in np.where(invalid_mask[row_index])[0]
+                    ]
+
+                    invalid_details.append(
+                        f"{candidate.iloc[row_index]['Date']}: "
+                        f"{', '.join(bad_columns)}"
+                    )
+
+                raise ValueError(
+                    "Provider data contains missing or non-finite values. "
+                    f"Invalid rows: {'; '.join(invalid_details)}"
+                )
         prices = candidate[["Open", "High", "Low", "Close"]]
 
         if (prices <= 0).any().any():
