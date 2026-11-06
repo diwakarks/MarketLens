@@ -13,6 +13,7 @@ import type {
   BenchmarkComparisonResponse,
 } from "../api";
 import { formatPrice, formatPercent } from "../utils/formatters";
+import FundamentalsPanel from "../components/stock/FundamentalsPanel";
 
 type Period =
   | "1M"
@@ -189,6 +190,8 @@ export default function StockAnalysisPage({
               currency={currency}
               benchmarkName={metricsBenchmarkName}
             />
+
+            <FundamentalsPanel ticker={selectedStock} />
 
             <section className="analysis-grid" id="performance">
               <article className="panel performance-panel">

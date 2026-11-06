@@ -62,6 +62,52 @@ export interface StockMetricsResponse {
   benchmark_name: string;
 }
 
+export interface FundamentalMetricSet {
+  roe: number | null;
+  roa: number | null;
+  roce: number | null;
+  operating_margin: number | null;
+  net_margin: number | null;
+  revenue_growth_yoy: number | null;
+  operating_income_growth_yoy: number | null;
+  net_income_growth_yoy: number | null;
+  eps_growth_yoy: number | null;
+  debt_to_equity: number | null;
+  current_ratio: number | null;
+  interest_coverage: number | null;
+  operating_cash_flow: number | null;
+  free_cash_flow: number | null;
+  cfo_to_net_income: number | null;
+  fcf_margin: number | null;
+}
+
+export interface StockFundamentalsResponse {
+  ticker: string;
+  provider: string;
+  fetched_at: string;
+  company: {
+    name: string | null;
+    sector: string | null;
+    industry: string | null;
+    currency: string | null;
+    financial_currency?: string | null;
+  };
+  periods: string[];
+  coverage: Record<string, number>;
+  analysis: {
+    ticker: string;
+    status: "supported" | "unsupported_sector";
+    message?: string;
+    periods: string[];
+    metrics: Record<string, FundamentalMetricSet>;
+    coverage: {
+      available_periods: number;
+      available_values_by_metric: Record<string, number>;
+    };
+    methodology?: Record<string, string>;
+  };
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -149,7 +195,13 @@ export function getStockMetrics(
     `/stocks/${encodeURIComponent(ticker)}/metrics${buildDateParams(startDate, endDate)}`,
   );
 }
-
+export function getStockFundamentals(
+  ticker: string,
+): Promise<StockFundamentalsResponse> {
+  return request(
+    `/stocks/${encodeURIComponent(ticker)}/fundamentals`,
+  );
+}
 export interface DailyPrice {
   date: string;
   Open: number;
